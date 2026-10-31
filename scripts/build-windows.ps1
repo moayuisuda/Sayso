@@ -10,7 +10,8 @@ Push-Location $repo
 try {
     & cargo build --manifest-path core/Cargo.toml -p sayso-windows-bridge --release --locked
     if ($LASTEXITCODE) { throw 'Rust core 构建失败。' }
-    $versionArgs = if ($Version) { @("-p:Version=$Version") } else { @() }
+    # @() 保证始终是数组：单元素数组从 if 表达式返回时会被展开成字符串，展开后按字符传参。
+    $versionArgs = @(if ($Version) { "-p:Version=$Version" })
     & $dotnet publish windows/Sayso/Sayso.csproj -c Release -p:Platform=x64 -o build/windows @versionArgs
     if ($LASTEXITCODE) { throw 'Windows 客户端构建失败。' }
     if ($Test) {

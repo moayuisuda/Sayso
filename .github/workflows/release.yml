@@ -14,20 +14,20 @@ jobs:
   test:
     runs-on: macos-26
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v6
       - run: cargo test --manifest-path core/Cargo.toml --workspace --locked
 
   macos:
     needs: test
     runs-on: macos-26
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v6
       # 流水线没有签名证书，bundle-app.sh 使用 ad-hoc 签名。
       - name: Build Sayso.app
         run: VERSION="${GITHUB_REF_NAME#v}" bash scripts/bundle-app.sh
       - name: Package
         run: ditto -c -k --keepParent build/Sayso.app "Sayso-${GITHUB_REF_NAME#v}-macOS-arm64.zip"
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@v6
         with:
           name: macos
           path: Sayso-*-macOS-arm64.zip
@@ -36,7 +36,7 @@ jobs:
     needs: test
     runs-on: windows-2025
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v6
       - name: Build
         run: ./scripts/build-windows.ps1 -Version ($env:GITHUB_REF_NAME.TrimStart('v'))
       # 安装脚本与程序同包发布：解压后运行 install-windows.ps1 -Source app。
@@ -47,7 +47,7 @@ jobs:
           Copy-Item build/windows dist/app -Recurse
           Copy-Item scripts/install-windows.ps1, scripts/uninstall-windows.ps1 dist/
           Compress-Archive -Path dist/* -DestinationPath "Sayso-$version-windows-x64.zip"
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@v6
         with:
           name: windows
           path: Sayso-*-windows-x64.zip
@@ -56,7 +56,7 @@ jobs:
     needs: [macos, windows]
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/download-artifact@v4
+      - uses: actions/download-artifact@v7
         with:
           merge-multiple: true
       - name: Publish

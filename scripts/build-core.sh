@@ -32,5 +32,7 @@ cp "$GENERATED/SaysoCoreFFI.modulemap" "$HEADERS/module.modulemap"
 
 rm -rf "$XCFRAMEWORK"
 xcodebuild -create-xcframework -library "$LIBRARY" -headers "$HEADERS" -output "$XCFRAMEWORK" >/dev/null
+# 该目录只存放生成的绑定（不入库），新检出的仓库中不存在。
+mkdir -p "$PROJECT_DIR/Sources/SaysoCore"
 cp "$GENERATED/SaysoCore.swift" "$PROJECT_DIR/Sources/SaysoCore/SaysoCore.swift"
 echo "Built $XCFRAMEWORK"

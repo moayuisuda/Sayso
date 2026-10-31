@@ -1,4 +1,4 @@
-//! 已注册的扩展：内置插件与安装在扩展目录中的插件，以及它们的命令、识别器与最近一次执行结果。
+//! 已注册的扩展：内置插件与安装在扩展目录中的插件，以及它们的命令与最近一次执行结果。
 
 use std::collections::{HashMap, HashSet};
 use std::path::Path;
@@ -98,15 +98,6 @@ impl Extensions {
             .collect()
     }
 
-    /// 已启用且提供识别器的扩展。
-    pub fn recognizers<'a>(&'a self, settings: &'a Settings) -> impl Iterator<Item = &'a Plugin> {
-        self.enabled(settings).filter(|plugin| plugin.manifest.recognizer.is_some())
-    }
-
-    pub fn recognizer<'a>(&'a self, settings: &'a Settings, id: &str) -> Option<&'a Plugin> {
-        self.recognizers(settings).find(|plugin| plugin.id() == id)
-    }
-
     /// 已启用、订阅了该事件且在投递范围内的扩展。
     pub fn recipients(&self, settings: &Settings, event_type: EventType, route: &Route) -> Vec<Plugin> {
         self.enabled(settings)
@@ -144,10 +135,6 @@ pub fn capability_description(capability: Capability) -> String {
         ),
         Capability::Llm => tr("使用你配置的翻译模型", "Use the translation model you configured"),
         Capability::Publish => tr("向其他扩展广播事件", "Broadcast events to other extensions"),
-        Capability::Audio => tr(
-            "录音时接收你的麦克风音频（用于语音识别）",
-            "Receive your microphone audio while recording (for speech recognition)",
-        ),
         Capability::Fs => tr("读写你电脑上的文件", "Read and write files on your computer"),
     }
 }
@@ -158,10 +145,6 @@ pub(crate) fn permission_summary(manifest: &Manifest) -> String {
         let events: Vec<_> = manifest.events.iter().map(|event| event.name()).collect();
         let events = events.join(", ");
         lines.push(tr(&format!("它将收到：{events}"), &format!("It will receive: {events}")));
-    }
-    if let Some(recognizer) = &manifest.recognizer {
-        let title = &recognizer.title;
-        lines.push(tr(&format!("它提供语音识别器「{title}」"), &format!("It provides the recognizer “{title}”")));
     }
     let mut capabilities = manifest.capabilities.clone();
     capabilities.sort();

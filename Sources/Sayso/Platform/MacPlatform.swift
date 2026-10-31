@@ -35,7 +35,7 @@ final class MacPlatform: Platform, @unchecked Sendable {
         await SelectionReader.read()
     }
 
-    func insertText(text: String, destination: AppInfo?) async -> Delivery {
+    func insertText(text: String, destination: AppInfo?) async throws -> Delivery {
         await injector.deliver(text, to: destination)
     }
 
@@ -43,8 +43,8 @@ final class MacPlatform: Platform, @unchecked Sendable {
         AppInfo.frontmost()
     }
 
-    func speak(text: String, language: Language, rate: Float) {
-        onMain { self.pronouncer.speak(text, in: language, rate: rate) }
+    func speak(text: String, language: Language, rate: Float) throws {
+        try onMainSync { try self.pronouncer.speak(text, in: language, rate: rate) }
     }
 
     func stopSpeaking() {
@@ -72,6 +72,15 @@ final class MacPlatform: Platform, @unchecked Sendable {
 
     func secretWrite(account: String, value: String?) {
         KeychainStore.write(value ?? "", for: account)
+    }
+}
+
+/// 朗读开始或失败须在平台回调返回前确定，不能把抛错的操作异步丢到主队列。
+private func onMainSync(_ body: @MainActor () throws -> Void) throws {
+    if Thread.isMainThread {
+        try MainActor.assumeIsolated(body)
+    } else {
+        try DispatchQueue.main.sync { try MainActor.assumeIsolated(body) }
     }
 }
 

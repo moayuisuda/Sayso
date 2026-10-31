@@ -11,7 +11,6 @@ extension Capability {
         case .insert: return "text.insert"
         case .llm: return "sparkles"
         case .publish: return "dot.radiowaves.left.and.right"
-        case .audio: return "mic"
         case .fs: return "folder"
         }
     }

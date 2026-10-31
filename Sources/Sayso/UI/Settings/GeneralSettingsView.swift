@@ -8,6 +8,7 @@ struct GeneralSettingsView: View {
 
     @State private var microphoneGranted = Permissions.microphoneGranted
     @State private var accessibilityGranted = Permissions.accessibilityGranted
+    @State private var previewError: String?
     private let permissionTimer = Timer.publish(every: 1, on: .main, in: .common).autoconnect()
 
     var body: some View {
@@ -61,9 +62,21 @@ struct GeneralSettingsView: View {
                         Slider(value: model.binding(\.speechRate), in: 0.3...0.6)
                             .frame(maxWidth: 220)
                         Button(L("试听", "Preview")) {
-                            pronouncer.speak("Practice makes perfect.", in: model.settings.targetLanguage, rate: model.settings.speechRate)
+                            do {
+                                try pronouncer.speak("Practice makes perfect.", in: model.settings.targetLanguage, rate: model.settings.speechRate)
+                                previewError = nil
+                            } catch PlatformError.Failed(let message) {
+                                previewError = message
+                            } catch {
+                                previewError = error.localizedDescription
+                            }
                         }
                         .buttonStyle(.chip)
+                    }
+                    if let previewError {
+                        Label(previewError, systemImage: "speaker.slash.fill")
+                            .font(.system(size: 12))
+                            .foregroundStyle(.red)
                     }
                 }
             }

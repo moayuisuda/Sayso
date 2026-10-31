@@ -22,6 +22,8 @@ pub enum CoreError {
     #[error("{0}")]
     Recognition(String),
     #[error("{0}")]
+    Platform(#[from] crate::platform::PlatformError),
+    #[error("{0}")]
     Io(String),
 }
 

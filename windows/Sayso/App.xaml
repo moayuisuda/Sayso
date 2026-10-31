@@ -1,0 +1,38 @@
+<Application x:Class="Sayso.App" xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation" xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml">
+  <Application.Resources>
+    <ResourceDictionary>
+      <ResourceDictionary.ThemeDictionaries>
+        <ResourceDictionary x:Key="Light">
+          <SolidColorBrush x:Key="SaysoCard" Color="#09000000" />
+          <SolidColorBrush x:Key="SaysoLine" Color="#19000000" />
+          <SolidColorBrush x:Key="SaysoAccentText" Color="#3F51B5" />
+          <SolidColorBrush x:Key="SaysoSelection" Color="#1F3F51B5" />
+          <SolidColorBrush x:Key="SaysoSecondary" Color="#99000000" />
+          <SolidColorBrush x:Key="SaysoCritical" Color="#C42B1C" />
+          <SolidColorBrush x:Key="SaysoWarning" Color="#9A6A19" />
+          <SolidColorBrush x:Key="SaysoSuccess" Color="#237C54" />
+          <SolidColorBrush x:Key="SaysoFloatingSurface" Color="#F0FAFBFD" />
+          <SolidColorBrush x:Key="SaysoFloatingLine" Color="#1A161B2C" />
+        </ResourceDictionary>
+        <ResourceDictionary x:Key="Dark">
+          <SolidColorBrush x:Key="SaysoCard" Color="#09FFFFFF" />
+          <SolidColorBrush x:Key="SaysoLine" Color="#19FFFFFF" />
+          <SolidColorBrush x:Key="SaysoAccentText" Color="#9FA8DA" />
+          <SolidColorBrush x:Key="SaysoSelection" Color="#427986CB" />
+          <SolidColorBrush x:Key="SaysoSecondary" Color="#99FFFFFF" />
+          <SolidColorBrush x:Key="SaysoCritical" Color="#FF99A4" />
+          <SolidColorBrush x:Key="SaysoWarning" Color="#E6BD74" />
+          <SolidColorBrush x:Key="SaysoSuccess" Color="#78C39A" />
+          <SolidColorBrush x:Key="SaysoFloatingSurface" Color="#F01E1F24" />
+          <SolidColorBrush x:Key="SaysoFloatingLine" Color="#1EFFFFFF" />
+        </ResourceDictionary>
+      </ResourceDictionary.ThemeDictionaries>
+      <ResourceDictionary.MergedDictionaries><XamlControlsResources xmlns="using:Microsoft.UI.Xaml.Controls" /></ResourceDictionary.MergedDictionaries>
+      <SolidColorBrush x:Key="SaysoAccent" Color="#3F51B5" />
+      <SolidColorBrush x:Key="SaysoOnAccent" Color="White" />
+      <Thickness x:Key="ButtonPadding">12,6,12,6</Thickness>
+      <CornerRadius x:Key="ControlCornerRadius">6</CornerRadius>
+      <Style TargetType="TextBlock"><Setter Property="FontSize" Value="13" /></Style>
+    </ResourceDictionary>
+  </Application.Resources>
+</Application>

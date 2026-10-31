@@ -1,17 +1,15 @@
-//! 语音识别：云端流式识别、录完后批量识别，以及扩展提供的子进程识别器。可选的识别来源见 [`source`]。
+//! 语音识别：云端流式识别，以及通过 URL 接入的本地或云端批量识别。可选来源见 [`source`]。
 //!
 //! 一次录音对应一个 [`Recognition`]：录音期间 `append` 音频，结束时 `finish` 取得最终文本，或 `cancel` 放弃。
 //! 各识别服务只实现「消费音频通道、产出文本」的异步函数，缓冲、结束等待与取消在这里统一处理。
 
 mod openai_transcription;
 mod qwen;
-mod recognizer;
 mod soniox;
 pub mod source;
 mod streaming;
 mod volcengine;
 
-use std::path::PathBuf;
 use std::sync::Arc;
 use std::time::Duration;
 
@@ -21,7 +19,7 @@ use tokio::task::JoinHandle;
 
 use crate::error::CoreError;
 use crate::l10n::tr;
-use crate::protocol::{LanguagePair, RecognizerSpec};
+use crate::protocol::LanguagePair;
 
 /// 识别音频格式：16kHz 单声道 16 位小端 PCM。
 pub const SAMPLE_RATE: u32 = 16_000;
@@ -35,10 +33,9 @@ const BATCH_FINISH_TIMEOUT: Duration = Duration::from_secs(60);
 #[derive(Clone, Debug)]
 pub enum AsrConfig {
     Volcengine { api_key: String, resource_id: String },
-    Qwen { api_key: String, languages: LanguagePair },
+    Qwen { api_key: String, languages: LanguagePair, context: String },
     Soniox { api_key: String, languages: LanguagePair },
     OpenAiCompatible { api_key: String, base_url: String, model: String, languages: LanguagePair },
-    Extension { extension_id: String, directory: PathBuf, spec: RecognizerSpec, languages: LanguagePair },
 }
 
 impl AsrConfig {
@@ -46,7 +43,6 @@ impl AsrConfig {
         match self {
             Self::Volcengine { .. } | Self::Qwen { .. } | Self::Soniox { .. } => STREAMING_FINISH_TIMEOUT,
             Self::OpenAiCompatible { .. } => BATCH_FINISH_TIMEOUT,
-            Self::Extension { spec, .. } => spec.finish_timeout(),
         }
     }
 }
@@ -84,17 +80,14 @@ impl Recognition {
                 AsrConfig::Volcengine { api_key, resource_id } => {
                     streaming::run(volcengine::Wire::new(api_key, resource_id), chunks, partial).await
                 }
-                AsrConfig::Qwen { api_key, languages } => {
-                    streaming::run(qwen::Wire::new(api_key, languages), chunks, partial).await
+                AsrConfig::Qwen { api_key, languages, context } => {
+                    streaming::run(qwen::Wire::new(api_key, languages, context), chunks, partial).await
                 }
                 AsrConfig::Soniox { api_key, languages } => {
                     streaming::run(soniox::Wire::new(api_key, languages), chunks, partial).await
                 }
                 AsrConfig::OpenAiCompatible { api_key, base_url, model, languages } => {
                     openai_transcription::run(&http, &api_key, &base_url, &model, languages, chunks).await
-                }
-                AsrConfig::Extension { extension_id, directory, spec, languages } => {
-                    recognizer::run(&extension_id, &directory, &spec, languages, chunks, partial).await
                 }
             };
             let _ = sender.send(outcome.map(|text| text.trim().to_string()));
@@ -121,7 +114,7 @@ impl Recognition {
         }
     }
 
-    /// 放弃本次识别：结束连接或识别器进程。
+    /// 放弃本次识别，结束服务连接。
     pub fn cancel(self) {
         self.task.abort();
     }

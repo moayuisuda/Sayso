@@ -71,11 +71,11 @@ impl Inner {
         destination: Option<AppInfo>,
         by: String,
         surface_id: Option<String>,
-    ) -> Delivery {
-        let delivery = self.platform.insert_text(text.clone(), destination.clone()).await;
+    ) -> Result<Delivery, CoreError> {
+        let delivery = self.platform.insert_text(text.clone(), destination.clone()).await?;
         let payload = Payload::Inserted { text, destination, delivery, by: by.clone() };
         self.dispatch(payload, surface_id.as_deref(), Route::Republished { by });
-        delivery
+        Ok(delivery)
     }
 
     /// 记录执行结果；命令失败时把原因显示在候选框中。
@@ -150,7 +150,7 @@ impl Host for DispatchHost {
             Instruction::Speak { text, language } => {
                 let settings = self.inner.settings();
                 if settings.auto_speak {
-                    self.inner.platform.speak(text, language, settings.speech_rate);
+                    self.inner.speak(text, language, self.surface_id.as_deref());
                 }
             }
             Instruction::PublishTranslation { pairs, context } => {
@@ -176,7 +176,7 @@ impl Host for DispatchHost {
     async fn insert(&self, text: String) -> Result<Delivery, CoreError> {
         let command = self.command.as_ref().ok_or(CoreError::InsertOutsideCommand)?;
         let by = self.extension_id.clone();
-        Ok(self.inner.insert(text, command.source.clone(), by, self.surface_id.clone()).await)
+        self.inner.insert(text, command.source.clone(), by, self.surface_id.clone()).await
     }
 
     fn records(&self, collection: &str) -> Result<Vec<StoreRecord>, CoreError> {

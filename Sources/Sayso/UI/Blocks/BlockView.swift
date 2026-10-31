@@ -97,8 +97,7 @@ private struct TextBlockView: View {
 
     var body: some View {
         Text(attributed)
-            .font(.system(size: role == .secondary ? 13 : 15))
-            .foregroundStyle(role == .secondary ? .secondary : .primary)
+            .transcriptStyle(secondary: role == .secondary)
             .fixedSize(horizontal: false, vertical: true)
             .environment(\.openURL, OpenURLAction { url in
                 if url.scheme == Self.scheme, let id = url.host, let action = block.action(withID: id) {
@@ -117,7 +116,6 @@ private struct TextBlockView: View {
             case .highlight:
                 piece.backgroundColor = Theme.highlightFill
                 piece.foregroundColor = Theme.accentForeground
-                piece.inlinePresentationIntent = .stronglyEmphasized
             case .muted:
                 piece.foregroundColor = .secondary
             }

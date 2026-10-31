@@ -1,0 +1,17 @@
+[
+  {"transcript":"扣你吉瓦","languages":{"target":"ja","native":"zh"},"contains":["こんにちは"]},
+  {"transcript":"扣你吉瓦，我会去动物园。","languages":{"target":"ja","native":"zh"},"contains":["こんにちは","動物園"]},
+  {"transcript":"瓦卡里马西他。","languages":{"target":"ja","native":"zh"},"contains":["わかりました"]},
+  {"transcript":"肯恰那。","languages":{"target":"ko","native":"zh"},"contains":["괜찮아"]},
+  {"transcript":"古德莫宁。","languages":{"target":"en","native":"zh"},"contains":["good morning"]},
+  {"transcript":"三克油，you helped me a lot.","languages":{"target":"en","native":"zh"},"contains":["thank you","you helped me a lot"]},
+  {"transcript":"蹦猪。","languages":{"target":"fr","native":"zh"},"contains":["bonjour"]},
+  {"transcript":"古腾摩根。","languages":{"target":"de","native":"zh"},"contains":["guten morgen"]},
+  {"transcript":"格拉西亚斯。","languages":{"target":"es","native":"zh"},"contains":["gracias"]},
+  {"transcript":"斯巴西巴。","languages":{"target":"ru","native":"zh"},"contains":["спасибо"]},
+  {"transcript":"She said nee how to me.","languages":{"target":"zh","native":"en"},"contains":["你好"]},
+  {"transcript":"请称三克油，倒进锅里。","languages":{"target":"en","native":"zh"},"contains":["oil"],"excludes":["thank you"]},
+  {"transcript":"我买了三块瓦。","languages":{"target":"ja","native":"zh"},"excludes":["こんにちは","扣你吉瓦"]},
+  {"transcript":"My knee hurts.","languages":{"target":"zh","native":"en"},"contains":["膝盖"],"excludes":["你好"]},
+  {"transcript":"请把东西交给阿里。","languages":{"target":"ja","native":"zh"},"excludes":["ありがとう"]}
+]

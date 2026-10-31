@@ -18,10 +18,12 @@ struct FakeHost {
     extension_id: String,
     reply: String,
     delivery: Delivery,
+    insert_error: Mutex<Option<String>>,
     stores: Arc<Stores>,
     instructions: Mutex<Vec<Instruction>>,
     inserted: Mutex<Vec<String>>,
     completions: AtomicUsize,
+    prompts: Mutex<Vec<String>>,
 }
 
 impl FakeHost {
@@ -30,10 +32,12 @@ impl FakeHost {
             extension_id: extension_id.into(),
             reply: reply.into(),
             delivery,
+            insert_error: Mutex::default(),
             stores,
             instructions: Mutex::default(),
             inserted: Mutex::default(),
             completions: AtomicUsize::new(0),
+            prompts: Mutex::default(),
         })
     }
 
@@ -66,12 +70,16 @@ impl Host for FakeHost {
         Ok(())
     }
 
-    async fn complete(&self, _system: String, _user: String) -> Result<String, CoreError> {
+    async fn complete(&self, system: String, _user: String) -> Result<String, CoreError> {
         self.completions.fetch_add(1, Ordering::SeqCst);
+        self.prompts.lock().unwrap().push(system);
         Ok(self.reply.clone())
     }
 
     async fn insert(&self, text: String) -> Result<Delivery, CoreError> {
+        if let Some(message) = self.insert_error.lock().unwrap().clone() {
+            return Err(CoreError::Platform(sayso_core::PlatformError::Failed { message }));
+        }
         self.inserted.lock().unwrap().push(text);
         Ok(self.delivery)
     }
@@ -131,7 +139,7 @@ async fn run_dictation(transcript: &str, reply: &str, delivery: Delivery) -> (Ru
 /// 混说翻译后写入译文（译文可连带改写相邻词 a → an），输出文本块与剪贴板提示，朗读翻译块，最后广播词对。
 #[tokio::test]
 async fn dictation_translates_inserts_speaks_and_publishes() {
-    let reply = "```json\n{\"segments\":[{\"text\":\"I have \"},{\"text\":\"an apple\",\"source\":\"a 苹果\"},{\"text\":\".\"}]}\n```";
+    let reply = r#"{"segments":[{"from":1,"to":2,"text":"I have "},{"from":3,"to":4,"text":"an apple"},{"from":5,"to":5,"text":"."}]}"#;
     let (result, host) = run_dictation("I have a 苹果.", reply, Delivery::CopiedToClipboard).await;
 
     assert_eq!(result.status, RunStatus::Succeeded);
@@ -151,10 +159,34 @@ async fn dictation_translates_inserts_speaks_and_publishes() {
     );
 }
 
+/// 写入平台报错时保留译文与生词事件，不得声称已复制到剪贴板。
+#[tokio::test]
+async fn dictation_preserves_translation_and_word_pairs_when_insertion_fails() {
+    let (_directory, stores) = temporary_stores();
+    let host = FakeHost::new(
+        "sayso.dictation",
+        r#"{"segments":[{"from":1,"to":2,"text":"I have "},{"from":3,"to":4,"text":"an apple"},{"from":5,"to":5,"text":"."}]}"#,
+        Delivery::Inserted,
+        stores,
+    );
+    *host.insert_error.lock().unwrap() = Some("Clipboard snapshot failed".into());
+    let result = run(&built_in("sayso.dictation"), &command("I have a 苹果.", InputSource::Speech), host.clone()).await;
+    assert_eq!(result.status, RunStatus::Succeeded);
+    assert!(host.inserted().is_empty());
+    let blocks = host.blocks();
+    assert_eq!(block_ids(&blocks), ["text", "insertion"]);
+    let BlockContent::Status { message, .. } = &blocks[1].content else { panic!("expected insertion error") };
+    assert!(message.contains("Clipboard snapshot failed"));
+    assert!(!message.contains("copied to clipboard"));
+    assert!(host.instructions().iter().any(|instruction| matches!(instruction,
+        Instruction::PublishTranslation { pairs, .. } if pairs == &[pair("an apple", "a 苹果")]
+    )));
+}
+
 /// 译文两侧的空白移到普通文本中，相邻普通文本合并，高亮片段只包含译文本身。
 #[tokio::test]
 async fn dictation_moves_whitespace_around_translations_into_text() {
-    let reply = r#"{"segments":[{"text":"I want to"},{"text":" eat an apple ","source":"吃一个苹果"},{"text":"after lunch"},{"text":"."}]}"#;
+    let reply = r#"{"segments":[{"from":1,"to":3,"text":"I want to "},{"from":4,"to":4,"text":"eat an apple "},{"from":5,"to":7,"text":"after lunch."}]}"#;
     let (_, host) = run_dictation("I want to 吃一个苹果 after lunch.", reply, Delivery::Inserted).await;
 
     let BlockContent::Text { runs, .. } = &host.blocks()[0].content else { panic!("expected text block") };
@@ -174,10 +206,10 @@ async fn dictation_skips_model_for_pure_target_language() {
     assert!(!host.instructions().iter().any(|i| matches!(i, Instruction::PublishTranslation { .. })));
 }
 
-/// 翻译结果不可信（编造原文）时原样写入识别结果并提示原因，说的话不丢。
+/// 翻译引用了不存在的原文时，不提交不可信结果。
 #[tokio::test]
 async fn dictation_inserts_transcript_when_translation_is_untrusted() {
-    let reply = r#"{"segments":[{"text":"I have "},{"text":"a banana","source":"香蕉"},{"text":"."}]}"#;
+    let reply = r#"{"segments":[{"from":1,"to":2,"text":"I have "},{"from":3,"to":9,"text":"a banana"}]}"#;
     let (result, host) = run_dictation("I have a 苹果.", reply, Delivery::Inserted).await;
 
     assert_eq!(result.status, RunStatus::Succeeded);
@@ -185,6 +217,157 @@ async fn dictation_inserts_transcript_when_translation_is_untrusted() {
     assert_eq!(block_ids(&host.blocks()), ["text", "notice"]);
     assert!(speaks(&host.instructions()).is_empty());
     assert!(!host.instructions().iter().any(|i| matches!(i, Instruction::PublishTranslation { .. })));
+}
+
+/// 所有支持的语言对都选择自身资料，且生成的完整分段示例能通过真实插件的校验与发布流程。
+#[tokio::test]
+async fn dictation_prompt_profiles_cover_all_language_pairs_without_leaking_pair_rules() {
+    let plugin = built_in("sayso.dictation");
+    for target in Language::ALL {
+        for native in Language::ALL.into_iter().filter(|native| *native != target) {
+            let (_directory, stores) = temporary_stores();
+            let host = FakeHost::new("sayso.dictation", "", Delivery::Inserted, stores.clone());
+            // 每种书写系统均有字符，确保所有语言对都会经过正式的模型调用入口。
+            let mut event = command("a 中 あ 한 я", InputSource::Speech);
+            event.languages = LanguagePair { target, native };
+            let result = run(&plugin, &event, host.clone()).await;
+            assert_eq!(result.status, RunStatus::Succeeded);
+            let prompts = host.prompts.lock().unwrap();
+            assert_eq!(prompts.len(), 1, "{target:?}/{native:?}");
+            let prompt = &prompts[0];
+            assert!(prompt.contains(&format!("Source language ({}):", native.english_name())));
+            assert!(prompt.contains(&format!("Target language ({}):", target.english_name())));
+            assert!(prompt.contains(&format!(
+                "First-pass recognition repair ({} sounds written as {}):",
+                target.english_name(),
+                native.english_name()
+            )));
+            assert!(prompt.contains("recovery of misrecognized TARGET-LANGUAGE SPEECH, not semantic translation"));
+            assert!(prompt.contains("prefer the normal native meaning unless context clearly establishes an ASR error"));
+            assert!(prompt.contains("The original audio is not available to you"));
+            let shares_han = matches!(
+                (target, native),
+                (Language::Japanese, Language::Chinese) | (Language::Chinese, Language::Japanese)
+            );
+            assert_eq!(prompt.contains("Language-pair guidance:"), shares_han, "{target:?}/{native:?}");
+            assert_eq!(prompt.contains("Chinese and Japanese share Han"), shares_han);
+
+            let example = prompt.lines().last().unwrap();
+            let json: serde_json::Value = serde_json::from_str(example).unwrap();
+            let segments = json["output"]["segments"].as_array().unwrap();
+            let units = json["input"]["units"].as_array().unwrap();
+            assert_eq!(segments.len(), 3);
+            assert!(segments.iter().all(|segment| segment.get("language").is_none()));
+            let source = |segment: &serde_json::Value| -> String {
+                units[segment["from"].as_u64().unwrap() as usize - 1..segment["to"].as_u64().unwrap() as usize]
+                    .iter()
+                    .map(|unit| unit["text"].as_str().unwrap())
+                    .collect()
+            };
+            assert_eq!(source(&segments[1]), segments[1]["text"].as_str().unwrap());
+            let transcript = json["input"]["transcript"].as_str().unwrap();
+            assert_eq!(units.iter().map(|unit| unit["text"].as_str().unwrap()).collect::<String>(), transcript);
+            let output: String = segments.iter().map(|segment| segment["text"].as_str().unwrap()).collect();
+
+            // 把生成的例句作为输入及模型回复，验证组装、完整覆盖校验与两个词对的发布能配合工作。
+            let host = FakeHost::new("sayso.dictation", &json["output"].to_string(), Delivery::Inserted, stores);
+            let mut event = command(transcript, InputSource::Speech);
+            event.languages = LanguagePair { target, native };
+            assert_eq!(run(&plugin, &event, host.clone()).await.status, RunStatus::Succeeded);
+            assert_eq!(host.inserted(), [output], "{target:?}/{native:?}");
+            let Some(Instruction::PublishTranslation { pairs, .. }) = host.instructions().last().cloned() else {
+                panic!("expected translation pairs for {target:?}/{native:?}")
+            };
+            assert_eq!(pairs.len(), 2);
+            assert!(source(&segments[0]).contains(&pairs[0].native), "{pairs:?}");
+            assert!(source(&segments[2]).contains(&pairs[1].native), "{pairs:?}");
+        }
+    }
+}
+
+/// 日中共享汉字仍需逐段翻译；重复出现的中文、首尾中文均保留独立的词对。
+#[tokio::test]
+async fn dictation_covers_all_japanese_chinese_spans() {
+    let (_directory, stores) = temporary_stores();
+    let reply = r#"{"segments":[{"from":1,"to":2,"text":"こんにちは。"},{"from":3,"to":4,"text":"わかりました。"},{"from":5,"to":6,"text":"こんにちは。"},{"from":7,"to":8,"text":"動物園に行きます。"}]}"#;
+    let host = FakeHost::new("sayso.dictation", reply, Delivery::Inserted, stores);
+    let mut event = command("你好。わかりました。你好。我会去动物园。", InputSource::Speech);
+    event.languages.target = Language::Japanese;
+    let result = run(&built_in("sayso.dictation"), &event, host.clone()).await;
+    assert_eq!(result.status, RunStatus::Succeeded);
+    assert_eq!(host.inserted(), ["こんにちは。わかりました。こんにちは。動物園に行きます。"]);
+    let Some(Instruction::PublishTranslation { pairs, .. }) = host.instructions().last().cloned() else {
+        panic!("expected translation pairs")
+    };
+    assert_eq!(
+        pairs,
+        [pair("こんにちは", "你好"), pair("こんにちは", "你好"), pair("動物園に行きます", "我会去动物园")]
+    );
+}
+
+/// 漏掉引用、重复引用、无效范围与空译文均不能作为完整翻译提交。
+#[tokio::test]
+async fn dictation_rejects_incomplete_or_misannotated_translations() {
+    for reply in [
+        r#"{"segments":[{"from":1,"to":2,"text":"apples and "}]}"#,
+        r#"{"segments":[{"from":1,"to":3,"text":"apples and bananas"},{"from":3,"to":3,"text":"bananas"}]}"#,
+        r#"{"segments":[{"from":0,"to":3,"text":"apples and bananas"}]}"#,
+        r#"{"segments":[{"from":1,"to":4,"text":"apples and bananas"}]}"#,
+        r#"{"segments":[{"from":1.5,"to":3,"text":"apples and bananas"}]}"#,
+        r#"{"segments":[{"from":1,"to":3,"text":" "}]}"#,
+    ] {
+        let (_, host) = run_dictation("苹果 和 香蕉", reply, Delivery::Inserted).await;
+        assert_eq!(host.inserted(), ["苹果 和 香蕉"]);
+        assert_eq!(block_ids(&host.blocks()), ["text", "notice"]);
+        assert!(!host
+            .instructions()
+            .iter()
+            .any(|instruction| matches!(instruction, Instruction::PublishTranslation { .. })));
+    }
+}
+
+/// 截图中的混说句可调整完整输出的标点、大小写；中文原文直接取本地引用，模型不再重抄 source。
+#[tokio::test]
+async fn dictation_regression_preserves_source_mapping_while_composing_the_whole_sentence() {
+    let transcript = "You'd better 统一这些 behavior For example, you just Make all this behavior. To like";
+    let reply = r#"{"segments":[{"from":1,"to":4,"text":"You'd better "},{"from":5,"to":5,"text":"unify these "},{"from":6,"to":6,"text":"behaviors. "},{"from":7,"to":9,"text":"For example, "},{"from":10,"to":16,"text":"you just make all this behavior. "},{"from":17,"to":18,"text":"To like"}]}"#;
+    let (result, host) = run_dictation(transcript, reply, Delivery::Inserted).await;
+    assert_eq!(result.status, RunStatus::Succeeded);
+    assert_eq!(block_ids(&host.blocks()), ["text"]);
+    assert_eq!(
+        host.inserted(),
+        ["You'd better unify these behaviors. For example, you just make all this behavior. To like"]
+    );
+    let Some(Instruction::PublishTranslation { pairs, .. }) = host.instructions().last().cloned() else {
+        panic!("expected translation pairs")
+    };
+    assert_eq!(pairs, [pair("unify these", "统一这些"), pair("behaviors.", "behavior")]);
+}
+
+/// 输出顺序不受原文引用顺序限制：句末的「昨天」可移到句首，相邻冠词也可随翻译调整。
+#[tokio::test]
+async fn dictation_allows_sentence_word_order_changes_and_grammar() {
+    let reply = r#"{"segments":[{"from":5,"to":5,"text":"Yesterday, "},{"from":1,"to":3,"text":"I went to "},{"from":4,"to":4,"text":"the zoo"},{"from":6,"to":6,"text":"."}]}"#;
+    let (_, host) = run_dictation("I went to 动物园 昨天.", reply, Delivery::Inserted).await;
+    assert_eq!(host.inserted(), ["Yesterday, I went to the zoo."]);
+    assert_eq!(block_ids(&host.blocks()), ["text"]);
+    let Some(Instruction::PublishTranslation { pairs, .. }) = host.instructions().last().cloned() else {
+        panic!("expected translation pairs")
+    };
+    assert_eq!(pairs, [pair("Yesterday,", "昨天"), pair("the zoo", "动物园")]);
+}
+
+/// 不同识别服务产生的制表符、换行不应要求模型重抄；输出可正常排版，词对仍保留真实原文。
+#[tokio::test]
+async fn dictation_keeps_original_formatting_in_references_without_constraining_output_layout() {
+    let reply = r#"{"segments":[{"from":1,"to":1,"text":"I "},{"from":2,"to":3,"text":"want an apple"},{"from":4,"to":4,"text":"."}]}"#;
+    let (_, host) = run_dictation("I\t想要\r\n一个苹果.", reply, Delivery::Inserted).await;
+    assert_eq!(host.inserted(), ["I want an apple."]);
+    assert_eq!(block_ids(&host.blocks()), ["text"]);
+    let Some(Instruction::PublishTranslation { pairs, .. }) = host.instructions().last().cloned() else {
+        panic!("expected translation pairs")
+    };
+    assert_eq!(pairs, [pair("want an apple", "想要\r\n一个苹果")]);
 }
 
 /// 划词翻译输出译文与原文块，朗读目标语言一侧，并以「目标 · 本地」词对广播；回复缺少原文语言时失败。
@@ -205,8 +388,7 @@ async fn selection_translates_speaks_and_publishes() {
 
     // 第三种语言（不是目标语言也不是本地语言）：译为本地语言并显示，不朗读、不广播给生词本。
     let (_directory, stores) = temporary_stores();
-    let host =
-        FakeHost::new("sayso.selection", r#"{"from":"fr","translation":"巅峰"}"#, Delivery::Inserted, stores);
+    let host = FakeHost::new("sayso.selection", r#"{"from":"fr","translation":"巅峰"}"#, Delivery::Inserted, stores);
     let result = run(&built_in("sayso.selection"), &command("apogée", InputSource::Selection), host.clone()).await;
     assert_eq!(result.status, RunStatus::Succeeded);
     assert_eq!(block_ids(&host.blocks()), ["translation", "original"]);
@@ -290,7 +472,96 @@ async fn wordbook_adds_single_words_and_all_remaining() {
 
     let paragraph =
         translation(vec![pair("This is a much longer sentence for you to read.", "这是一个长得多的句子。")], None);
-    assert!(send(&wordbook, &stores, paragraph, &[]).await.is_empty());
+    let long = send(&wordbook, &stores, paragraph, &[]).await;
+    assert_eq!(long.len(), 1);
+    assert_eq!(long[0].actions[0].label.as_deref(), Some("加入生词本"));
+    send(&wordbook, &stores, invoke(&long[0]), &long).await;
+    assert!(words()
+        .iter()
+        .any(|record| record.value("term") == Some("This is a much longer sentence for you to read.".into())));
+}
+
+/// 整句译文即使没有语言标签也必须产生真实词对，并经过生词本扩展生成可加入的块。
+#[tokio::test]
+async fn dictation_learning_blocks_do_not_depend_on_model_language_labels() {
+    let transcript = "I have a 苹果.";
+    let reply = r#"{"segments":[{"from":1,"to":5,"text":"I have an apple."}]}"#;
+    let (_, dictation) = run_dictation(transcript, reply, Delivery::Inserted).await;
+    assert_eq!(dictation.inserted(), ["I have an apple."]);
+    let Some(Instruction::PublishTranslation { pairs, context }) = dictation.instructions().last().cloned() else {
+        panic!("a translated sentence must publish learning pairs")
+    };
+    assert_eq!(pairs, [pair("an apple", "a 苹果")]);
+    let (_directory, stores) = temporary_stores();
+    let wordbook = FakeHost::new("sayso.wordbook", "", Delivery::Inserted, stores);
+    let event = Event::new(
+        LanguagePair::default(),
+        None,
+        Payload::Translation(Translation {
+            input: Input { text: transcript.into(), via: InputSource::Speech },
+            pairs,
+            context,
+            source: None,
+        }),
+    );
+    assert_eq!(run(&built_in("sayso.wordbook"), &event, wordbook.clone()).await.status, RunStatus::Succeeded);
+    let blocks = wordbook.blocks();
+    assert_eq!(block_ids(&blocks), ["en|an apple"]);
+    assert_eq!(blocks[0].actions[0].label.as_deref(), Some("加入生词本"));
+}
+
+/// 大小写、空白和标点变化不应产生额外的生词块。
+#[tokio::test]
+async fn dictation_learning_annotations_ignore_typographic_changes() {
+    let reply = r#"{"segments":[{"from":1,"to":3,"text":"HELLO world! "},{"from":4,"to":5,"text":"an apple."}]}"#;
+    let (_, host) = run_dictation("Hello world. 一个苹果。", reply, Delivery::Inserted).await;
+    assert_eq!(host.inserted(), ["HELLO world! an apple."]);
+    let Some(Instruction::PublishTranslation { pairs, .. }) = host.instructions().last().cloned() else {
+        panic!("expected the actual translation pair")
+    };
+    assert_eq!(pairs, [pair("an apple", "一个苹果")]);
+}
+
+/// 真实服务曾在整句重排时省略独立标点编号，或将其输出置空；两者都不代表漏掉原文词语。
+#[tokio::test]
+async fn dictation_accepts_rewritten_punctuation_without_losing_learning_pairs() {
+    for punctuation in ["", r#",{"from":16,"to":16,"text":""}"#] {
+        let reply = format!(
+            r#"{{"segments":[{{"from":1,"to":4,"text":"You'd better "}},{{"from":5,"to":5,"text":"unify these "}},{{"from":6,"to":6,"text":"behaviors. "}},{{"from":7,"to":9,"text":"For example, "}},{{"from":10,"to":12,"text":"you just make "}},{{"from":13,"to":15,"text":"all this behavior "}}{punctuation},{{"from":17,"to":18,"text":"to like"}}]}}"#
+        );
+        let (_, host) = run_dictation(
+            "You'd better 统一这些 behavior For example, you just Make all this behavior. To like",
+            &reply,
+            Delivery::Inserted,
+        )
+        .await;
+        assert_eq!(
+            host.inserted(),
+            ["You'd better unify these behaviors. For example, you just make all this behavior to like"]
+        );
+        assert_eq!(block_ids(&host.blocks()), ["text"]);
+        assert!(
+            matches!(host.instructions().last(), Some(Instruction::PublishTranslation { pairs, .. }) if !pairs.is_empty())
+        );
+    }
+}
+
+/// 中文可将句末 to me 的意思合入前面的「对我说」；引用后的空输出不能导致整句失败。
+#[tokio::test]
+async fn dictation_accepts_clause_reordering_without_per_span_word_output_requirements() {
+    let (_directory, stores) = temporary_stores();
+    let reply = r#"{"segments":[{"from":1,"to":2,"text":"她对我说"},{"from":3,"to":4,"text":"你好"},{"from":5,"to":7,"text":"。"}]}"#;
+    let host = FakeHost::new("sayso.dictation", reply, Delivery::Inserted, stores);
+    let mut event = command("She said nee how to me.", InputSource::Speech);
+    event.languages = LanguagePair { target: Language::Chinese, native: Language::English };
+    assert_eq!(run(&built_in("sayso.dictation"), &event, host.clone()).await.status, RunStatus::Succeeded);
+    assert_eq!(host.inserted(), ["她对我说你好。"]);
+    assert_eq!(block_ids(&host.blocks()), ["text"]);
+    let Some(Instruction::PublishTranslation { pairs, .. }) = host.instructions().last().cloned() else {
+        panic!("expected the restored target-language expression")
+    };
+    assert!(pairs.iter().any(|pair| pair.target == "你好" && pair.native == "nee how"));
+    assert!(pairs.iter().all(|pair| pair.target.chars().any(char::is_alphanumeric)));
 }
 
 /// 在临时扩展目录中安装一个测试插件。
@@ -382,9 +653,8 @@ async fn examples_load_and_handle_events() {
     let examples = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../examples/extensions");
     let (plugins, problems) = load_installed(&examples, &HashSet::new());
     assert!(problems.is_empty(), "{problems:?}");
-    let example = |name: &str| {
-        plugins.iter().find(|plugin| plugin.id() == format!("com.sayso.example.{name}")).unwrap().clone()
-    };
+    let example =
+        |name: &str| plugins.iter().find(|plugin| plugin.id() == format!("com.sayso.example.{name}")).unwrap().clone();
     let (_directory, stores) = temporary_stores();
 
     // 待办：输入来自哪种路由都一样，记成一条待办。

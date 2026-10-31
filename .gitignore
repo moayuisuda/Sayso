@@ -7,3 +7,5 @@ upstream/
 core/target/
 # build-core.sh 生成的 Swift 绑定
 Sources/SaysoCore/SaysoCore.swift
+windows/**/bin/
+windows/**/obj/

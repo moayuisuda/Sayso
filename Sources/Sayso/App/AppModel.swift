@@ -7,7 +7,7 @@ import SaysoCore
 @Observable
 final class SettingsNavigation {
     enum Tab: Hashable {
-        case general, recognition, translation, extensions
+        case general, models, extensions
         /// 扩展自己的页签，关联值为扩展 id。
         case `extension`(String)
     }
@@ -45,12 +45,14 @@ final class AppModel {
         platform.onLevel = { level in DispatchQueue.main.async { model.audioLevel = level } }
         model.onSessionChange = { [panel] in panel.update(for: $0) }
         hotkeys.isSessionActive = { core.isSessionActive() }
+        hotkeys.candidateSurface = { [panel] timestamp in panel.dismissibleSurface(forEventAt: timestamp) }
         hotkeys.onAction = { action in
             switch action {
             case .route(let route): core.trigger(route: route)
             case .stop: core.stop()
             case .toggle(let routes): core.toggle(routes: routes)
             case .cancel: core.cancel()
+            case .dismiss(let id): core.dismissSurface(surfaceId: id)
             }
         }
         syncHotkeysWithSettings()

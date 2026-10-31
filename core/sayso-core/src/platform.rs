@@ -27,9 +27,10 @@ pub trait Platform: Send + Sync {
     /// 读取前台应用中选中的文本；没有选区时为空字符串。
     async fn read_selection(&self) -> String;
     /// 把文字写入目标应用；没有可写入的位置时只放入剪贴板。
-    async fn insert_text(&self, text: String, destination: Option<AppInfo>) -> Delivery;
+    async fn insert_text(&self, text: String, destination: Option<AppInfo>) -> Result<Delivery, PlatformError>;
     fn frontmost_app(&self) -> Option<AppInfo>;
-    fn speak(&self, text: String, language: Language, rate: f32);
+    /// 开始朗读；缺少对应语言语音或无法启动播放时返回可展示的原因。
+    fn speak(&self, text: String, language: Language, rate: f32) -> Result<(), PlatformError>;
     fn stop_speaking(&self);
     fn copy_text(&self, text: String);
     fn open_url(&self, url: String);

@@ -2,7 +2,7 @@
 
 use std::sync::Arc;
 
-use super::APP_SOURCE;
+use super::{failure_block, Phase, APP_SOURCE};
 use crate::app::Inner;
 use crate::extensions::Route;
 use crate::protocol::{ActionInvocation, ActionKind, ActionOrigin, BlockAction, Payload};
@@ -42,7 +42,7 @@ impl Inner {
         };
         match action.kind {
             ActionKind::Speak { text, language } => {
-                self.platform.speak(text, language, self.settings().speech_rate);
+                self.speak(text, language, surface_id.as_deref());
             }
             ActionKind::Copy { text } => self.platform.copy_text(text),
             ActionKind::Open { url } => self.platform.open_url(url),
@@ -50,7 +50,19 @@ impl Inner {
                 // 候选框不会成为前台窗口，点击时前台应用仍是用户正在输入的应用。
                 let destination = self.platform.frontmost_app();
                 let (inner, by) = (self.clone(), source.to_string());
-                self.runtime.spawn(async move { inner.insert(text, destination, by, surface_id).await });
+                self.runtime.spawn(async move {
+                    if let Err(error) = inner.insert(text, destination, by, surface_id.clone()).await {
+                        inner.update_session(|session| {
+                            if let Phase::Presenting(surface) = &mut session.phase {
+                                if surface_id.as_deref() == Some(surface.id.as_str()) {
+                                    surface.upsert(failure_block(error.to_string()), APP_SOURCE, None);
+                                }
+                            } else if surface_id.is_none() && !session.is_active() {
+                                inner.present_failure(session, error.to_string());
+                            }
+                        });
+                    }
+                });
             }
             ActionKind::Invoke { payload } => {
                 let (origin, record) = match context {

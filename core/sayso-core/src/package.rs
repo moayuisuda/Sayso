@@ -1,7 +1,7 @@
 //! `.sayso` 扩展包：扩展目录的 zip 归档，原样包含其中全部文件（代码、模型、运行环境）。
 //!
 //! 扩展包不做下载或安装步骤，拿到的是什么就装什么；不同系统、架构的版本由发布者分别打包。
-//! 归档保留 unix 权限与符号链接，识别器自带的运行环境依赖这两项。扩展的用户数据不在扩展目录中，不会进入扩展包。
+//! 归档保留 unix 权限与符号链接。扩展的用户数据不在扩展目录中，不会进入扩展包。
 
 use std::fs::File;
 use std::io::{Read, Write};
@@ -161,16 +161,16 @@ mod tests {
     fn export_open_install_round_trip_keeps_modes_and_symlinks() {
         let root = tempfile::tempdir().unwrap();
         let source = root.path().join("pack");
-        std::fs::create_dir_all(source.join("model")).unwrap();
+        std::fs::create_dir_all(source.join("assets")).unwrap();
         std::fs::write(
             source.join(MANIFEST_FILE),
-            r#"{"schemaVersion":3,"id":"com.example.pack","name":"Pack","capabilities":["audio"],"recognizer":{"title":"Local","command":["./run.sh"]}}"#,
+            r#"{"schemaVersion":3,"id":"com.example.pack","name":"Pack","main":"main.js","events":["command"],"capabilities":["blocks"]}"#,
         )
         .unwrap();
-        std::fs::write(source.join("model/weights.bin"), vec![7u8; 4096]).unwrap();
-        std::fs::write(source.join("run.sh"), "#!/bin/sh\n").unwrap();
-        std::fs::set_permissions(source.join("run.sh"), std::fs::Permissions::from_mode(0o755)).unwrap();
-        std::os::unix::fs::symlink("model/weights.bin", source.join("weights")).unwrap();
+        std::fs::write(source.join("assets/data.bin"), vec![7u8; 4096]).unwrap();
+        std::fs::write(source.join("main.js"), "export function command() {}\n").unwrap();
+        std::fs::set_permissions(source.join("main.js"), std::fs::Permissions::from_mode(0o755)).unwrap();
+        std::os::unix::fs::symlink("assets/data.bin", source.join("data")).unwrap();
 
         let archive = root.path().join("pack.sayso");
         export(&source, &archive).unwrap();
@@ -180,9 +180,9 @@ mod tests {
 
         let target = root.path().join("Extensions/com.example.pack");
         install(contents, &target).unwrap();
-        assert_eq!(std::fs::read(target.join("model/weights.bin")).unwrap().len(), 4096);
-        assert_eq!(std::fs::metadata(target.join("run.sh")).unwrap().permissions().mode() & 0o777, 0o755);
-        assert_eq!(std::fs::read_link(target.join("weights")).unwrap(), Path::new("model/weights.bin"));
+        assert_eq!(std::fs::read(target.join("assets/data.bin")).unwrap().len(), 4096);
+        assert_eq!(std::fs::metadata(target.join("main.js")).unwrap().permissions().mode() & 0o777, 0o755);
+        assert_eq!(std::fs::read_link(target.join("data")).unwrap(), Path::new("assets/data.bin"));
         assert!(!root.path().join("staging").exists());
     }
 }

@@ -14,9 +14,9 @@ use crate::llm::Endpoint;
 use crate::package::{self, PackageContents};
 use crate::platform::{CoreObserver, Platform};
 use crate::plugin::CatalogProblem;
-use crate::protocol::{Block, BlockAction, Manifest};
+use crate::protocol::{Block, BlockAction, InputSource, Manifest};
 use crate::session::{ActionContext, Session, SessionState};
-use crate::settings::{self, PlatformDefaults, RouteKey, SecretSlot, Secrets, Settings};
+use crate::settings::{self, CommandKey, PlatformDefaults, RouteKey, SecretSlot, Secrets, Settings};
 use crate::store::{StoreWrite, Stores};
 
 /// 数据目录布局，与此前版本一致：已安装扩展与扩展数据都在其中。
@@ -185,7 +185,12 @@ impl Core {
 
     /// 关闭正在展示的候选框。
     pub fn dismiss(&self) {
-        self.inner.dismiss();
+        self.inner.dismiss(None);
+    }
+
+    /// 失焦与关闭快捷键携带面板 id，防止延迟事件关闭后续会话。
+    pub fn dismiss_surface(&self, surface_id: String) {
+        self.inner.dismiss(Some(&surface_id));
     }
 
     pub fn session_state(&self) -> SessionState {
@@ -228,6 +233,16 @@ impl Core {
         self.inner.modify_settings(|current| *current = settings.normalized(current))
     }
 
+    /// 原子修改命令绑定：继承输入来源、保留共享路由、清理不再使用的路由，然后落盘并通知宿主。
+    pub fn bind_command(&self, command: CommandKey, route: Option<RouteKey>) -> Result<(), CoreError> {
+        self.inner.modify_settings(|settings| settings.bind_command(command, route))
+    }
+
+    /// 修改已存在路由的共享输入来源。
+    pub fn set_route_input(&self, route: RouteKey, input: InputSource) -> Result<(), CoreError> {
+        self.inner.modify_settings(|settings| settings.set_route_input(route, input))
+    }
+
     pub fn secret(&self, slot: SecretSlot) -> String {
         self.inner.secrets().get(slot)
     }
@@ -250,22 +265,21 @@ impl Core {
 
     // MARK: 识别来源
 
-    /// 可选的识别来源：内置服务与已启用的扩展识别器。
+    /// 可选的识别来源：云端服务与通过 URL 接入的本地服务。
     pub fn asr_sources(&self) -> Vec<AsrSource> {
-        source::sources(&self.inner.settings(), &self.inner.extensions.read().unwrap())
+        source::sources()
     }
 
     /// 识别来源某个配置项的当前取值；来源或配置项不存在时为空。
     pub fn asr_value(&self, source_id: String, field_key: String) -> String {
         let settings = self.inner.settings();
-        let Some(field) = self.asr_field(&settings, &source_id, &field_key) else { return String::new() };
+        let Some(field) = self.asr_field(&source_id, &field_key) else { return String::new() };
         source::field_value(&source_id, &field, &settings, &self.inner.secrets())
     }
 
     /// 保存识别来源的配置项：密钥类存平台安全存储，其余存设置。
     pub fn set_asr_value(&self, source_id: String, field_key: String, value: String) -> Result<(), CoreError> {
-        let settings = self.inner.settings();
-        let Some(field) = self.asr_field(&settings, &source_id, &field_key) else { return Ok(()) };
+        let Some(field) = self.asr_field(&source_id, &field_key) else { return Ok(()) };
         if field.kind == AsrFieldKind::Secret {
             self.set_secret(SecretSlot::Asr { source: source_id, field: field_key }, value);
             return Ok(());
@@ -433,8 +447,8 @@ impl Core {
 }
 
 impl Core {
-    fn asr_field(&self, settings: &Settings, source_id: &str, field_key: &str) -> Option<AsrField> {
-        let source = source::find(source_id, settings, &self.inner.extensions.read().unwrap())?;
+    fn asr_field(&self, source_id: &str, field_key: &str) -> Option<AsrField> {
+        let source = source::find(source_id)?;
         source.fields.into_iter().find(|field| field.key == field_key)
     }
 

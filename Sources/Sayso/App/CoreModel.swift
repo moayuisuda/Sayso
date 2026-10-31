@@ -50,8 +50,12 @@ final class CoreModel {
     func update(_ change: (inout AppSettings) -> Void) {
         var updated = settings
         change(&updated)
+        applySettingsChange { try core.updateSettings(settings: updated) }
+    }
+
+    private func applySettingsChange(_ change: () throws -> Void) {
         do {
-            try core.updateSettings(settings: updated)
+            try change()
         } catch {
             logger.error("saving settings failed: \(error.localizedDescription, privacy: .public)")
         }
@@ -84,10 +88,9 @@ final class CoreModel {
         )
     }
 
-    /// 可选的识别来源：内置服务与已启用的扩展识别器，随扩展启停变化。
+    /// 可选的识别来源：云端服务与通过 URL 接入的本地服务。
     var asrSources: [AsrSource] {
-        _ = (settings, extensions)
-        return core.asrSources()
+        core.asrSources()
     }
 
     var languagesAreValid: Bool { settings.targetLanguage != settings.nativeLanguage }
@@ -128,25 +131,14 @@ final class CoreModel {
         settings.routes.first { $0.key == route }?.input
     }
 
-    /// 绑定或清除命令的路由。新路由键沿用命令原路由的输入来源，没有时为语音。
+    /// 宿主只提交编辑意图，路由的继承、共享与清理由 core 统一处理。
     func setRoute(_ route: RouteKey?, of command: CommandKey) {
-        let inherited = self.route(of: command).flatMap(input(of:)) ?? .speech
-        update { settings in
-            settings.commandBindings.removeAll { $0.command == command }
-            guard let route else { return }
-            if !settings.routes.contains(where: { $0.key == route }) {
-                settings.routes.append(Route(key: route, input: inherited))
-            }
-            settings.commandBindings.append(CommandBinding(command: command, route: route))
-        }
+        applySettingsChange { try core.bindCommand(command: command, route: route) }
     }
 
     /// 路由的输入来源；同一路由上的全部命令收到同一份输入。
     func setInput(_ input: InputSource, of route: RouteKey) {
-        update { settings in
-            guard let index = settings.routes.firstIndex(where: { $0.key == route }) else { return }
-            settings.routes[index].input = input
-        }
+        applySettingsChange { try core.setRouteInput(route: route, input: input) }
     }
 
     func storeRevision(_ id: String) -> Int {

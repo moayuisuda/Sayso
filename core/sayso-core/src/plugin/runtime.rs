@@ -4,7 +4,7 @@ use std::path::{Component, Path, PathBuf};
 use std::sync::{Arc, Mutex};
 use std::time::Instant;
 
-use rquickjs::loader::{ImportAttributes, Resolver, ScriptLoader};
+use rquickjs::loader::{BuiltinLoader, BuiltinResolver, ImportAttributes, Resolver, ScriptLoader};
 use rquickjs::prelude::Async;
 use rquickjs::{AsyncContext, AsyncRuntime, Ctx, Exception, Function, Module, Object, Value};
 
@@ -60,9 +60,20 @@ async fn execute(
     runtime.set_interrupt_handler(Some(Box::new(move || Instant::now() >= deadline))).await;
 
     let (module_name, source) = match &plugin.source {
-        PluginSource::BuiltIn { main } => (format!("{}/main.js", plugin.manifest.id), main.to_string()),
+        PluginSource::BuiltIn { main, modules } => {
+            // 内置扩展也使用标准 ES 模块；仅能导入本扩展随二进制嵌入的模块，不访问文件系统。
+            let mut resolver = BuiltinResolver::default();
+            let mut loader = BuiltinLoader::default();
+            for (name, source) in *modules {
+                let path = format!("{}/{name}", plugin.manifest.id);
+                resolver.add_module(path.clone());
+                loader.add_module(path, *source);
+            }
+            runtime.set_loader(resolver, loader).await;
+            (format!("{}/main.js", plugin.manifest.id), main.to_string())
+        }
         PluginSource::Installed { directory } => {
-            let main = directory.join(plugin.manifest.main.as_deref().unwrap_or_default());
+            let main = directory.join(&plugin.manifest.main);
             let source = std::fs::read_to_string(&main)
                 .map_err(|error| Failure::Error(format!("{}: {error}", main.display())))?;
             runtime.set_loader(PluginResolver { root: directory.clone() }, ScriptLoader::default()).await;

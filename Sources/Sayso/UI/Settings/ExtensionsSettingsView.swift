@@ -188,17 +188,6 @@ private struct ExtensionDetail: View {
                     .disabled(!info.enabled)
                 }
 
-                if let recognizer = manifest.recognizer {
-                    SettingsSection(L("语音识别器", "Speech recognizer")) {
-                        Label {
-                            Text(L("「\(recognizer.title)」：启用后可在「语音识别」中选用，录音时实时识别。",
-                                   "“\(recognizer.title)”: once enabled, choose it under Recognition for real-time transcription."))
-                        } icon: {
-                            Image(systemName: "waveform").foregroundStyle(Theme.accentForeground)
-                        }
-                    }
-                }
-
                 if !manifest.events.isEmpty {
                     SettingsSection(L("事件", "Events")) {
                         FlowLayout(spacing: 6) {

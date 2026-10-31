@@ -28,8 +28,7 @@ struct SettingsView: View {
     private var items: [SettingsTabItem] {
         [
             SettingsTabItem(tab: .general, title: L("通用", "General"), icon: "gearshape"),
-            SettingsTabItem(tab: .recognition, title: L("语音识别", "Recognition"), icon: "waveform"),
-            SettingsTabItem(tab: .translation, title: L("翻译模型", "Translation"), icon: "character.bubble"),
+            SettingsTabItem(tab: .models, title: L("模型配置", "Models"), icon: "character.bubble"),
             SettingsTabItem(tab: .extensions, title: L("扩展", "Extensions"), icon: "puzzlepiece.extension"),
         ] + model.tabExtensions.compactMap { info in
             info.manifest.tab.map { SettingsTabItem(tab: .extension(info.manifest.id), title: $0.title, icon: $0.icon ?? "puzzlepiece.extension") }
@@ -41,10 +40,8 @@ struct SettingsView: View {
         switch tab {
         case .general:
             GeneralSettingsView(model: model, hotkeys: app.hotkeys, pronouncer: app.platform.pronouncer)
-        case .recognition:
-            RecognitionSettingsView(model: model)
-        case .translation:
-            TranslationSettingsView(model: model)
+        case .models:
+            ModelSettingsView(model: model)
         case .extensions:
             ExtensionsSettingsView(model: model, packages: app.packages, hotkeys: app.hotkeys)
         case .extension(let id):

@@ -40,14 +40,14 @@ struct CandidateView: View {
             // 跟随最新识别的文字，正在说的内容始终可见。
             CappedScrollView(maxHeight: MaxHeight.liveText, followValue: partial) {
                 Text(partial.isEmpty ? L("请说…", "Listening…") : partial)
-                    .font(.system(size: 15))
-                    .foregroundStyle(partial.isEmpty ? .secondary : .primary)
+                    .transcriptStyle()
+                    .opacity(partial.isEmpty ? 0.65 : 1)
             }
         case .processing(let text):
             CappedScrollView(maxHeight: MaxHeight.liveText, followValue: text) {
                 Text(text.isEmpty ? L("处理中…", "Working…") : text)
-                    .font(.system(size: 15))
-                    .foregroundStyle(.secondary)
+                    .transcriptStyle()
+                    .opacity(text.isEmpty ? 0.65 : 1)
             }
         case .presenting(let surface):
             CappedScrollView(maxHeight: MaxHeight.result) {
@@ -93,9 +93,10 @@ struct CandidateView: View {
             KeyHint(title: L("取消", "Cancel"), keys: ["esc"])
         case .processing:
             KeyHint(title: L("取消", "Cancel"), keys: ["esc"])
-        case .presenting:
-            Button(L("关闭", "Close"), action: model.core.dismiss)
+        case .presenting(let surface):
+            Button(L("关闭", "Close")) { model.core.dismissSurface(surfaceId: surface.id) }
                 .buttonStyle(.chip)
+                .help(L("按 Enter 关闭候选框", "Press Enter to close the panel"))
         }
     }
 }
@@ -144,8 +145,7 @@ private struct SurfaceContent: View {
             // 扩展尚未输出任何块时先显示待处理内容（如选中的文本），进度在操作栏中显示。
             if surface.sections.isEmpty, surface.working {
                 Text(surface.placeholder ?? L("处理中…", "Working…"))
-                    .font(.system(size: 15))
-                    .foregroundStyle(.secondary)
+                    .transcriptStyle()
                     .lineLimit(4)
             }
         }

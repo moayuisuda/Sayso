@@ -83,7 +83,7 @@ pub struct Settings {
     /// 扩展输出朗读指令时自动朗读。
     pub auto_speak: bool,
     pub speech_rate: f32,
-    /// 选用的识别来源 id：内置服务或提供识别器的扩展。
+    /// 选用的识别服务 id，服务配置通过 asr_options 与安全存储读取。
     pub asr_source: String,
     /// 各识别来源的非密钥配置项，按来源 id、配置项 key 存储；从未填写过的配置项取来源声明的默认值。
     pub asr_options: HashMap<String, HashMap<String, String>>,
@@ -141,6 +141,26 @@ impl Settings {
         self.command_bindings.iter().find(|binding| &binding.command == command).map(|binding| binding.route)
     }
 
+    /// 改绑到新路由时继承原输入来源；首次绑定使用语音，已有目标路由的输入来源保持不变。
+    pub fn bind_command(&mut self, command: CommandKey, route: Option<RouteKey>) {
+        let input = self.binding(&command).and_then(|key| self.route(key)).map_or(InputSource::Speech, |r| r.input);
+        self.command_bindings.retain(|binding| binding.command != command);
+        if let Some(key) = route {
+            if self.route(key).is_none() {
+                self.routes.push(Route { key, input });
+            }
+            self.command_bindings.push(CommandBinding { command, route: key });
+        }
+        self.normalize_routes();
+    }
+
+    /// 输入来源属于路由，同一路由上的全部命令共享；路由仅由命令绑定操作创建。
+    pub fn set_route_input(&mut self, key: RouteKey, input: InputSource) {
+        if let Some(route) = self.routes.iter_mut().find(|route| route.key == key) {
+            route.input = input;
+        }
+    }
+
     /// 规整用户提交的设置：切换翻译服务时载入该服务的默认地址与模型；「直接」路由总是存在；
     /// 删除的路由键上的命令绑定随之移除，不再绑定命令的路由键随之删除。
     pub fn normalized(mut self, previous: &Settings) -> Self {
@@ -148,6 +168,11 @@ impl Settings {
             self.llm_base_url = self.llm_provider.default_base_url().into();
             self.llm_model = self.llm_provider.default_model().into();
         }
+        self.normalize_routes();
+        self
+    }
+
+    fn normalize_routes(&mut self) {
         if self.route(RouteKey::Direct).is_none() {
             self.routes.insert(0, Route { key: RouteKey::Direct, input: InputSource::Speech });
         }
@@ -162,7 +187,6 @@ impl Settings {
         let bindings = self.command_bindings.clone();
         self.routes
             .retain(|route| route.key == RouteKey::Direct || bindings.iter().any(|binding| binding.route == route.key));
-        self
     }
 }
 
@@ -261,5 +285,60 @@ mod tests {
         assert_eq!(normalized.llm_model, LlmProvider::Claude.default_model());
         assert_eq!(normalized.command_bindings.len(), 1);
         assert_eq!(normalized.command_bindings[0].command.extension_id, SPEECH_TRANSLATE_ID);
+    }
+
+    fn translate(extension: &str) -> CommandKey {
+        CommandKey { extension_id: extension.into(), command_id: "translate".into() }
+    }
+
+    #[test]
+    fn rebinding_inherits_input_and_respects_an_existing_destination() {
+        let mut settings = defaults();
+        let selection = translate(SELECTION_TRANSLATE_ID);
+        let original = settings.binding(&selection).unwrap();
+        let destination = RouteKey::Key { code: 89 };
+
+        settings.bind_command(selection.clone(), Some(destination));
+        assert_eq!(settings.route(destination).unwrap().input, InputSource::Selection);
+        assert!(settings.route(original).is_none());
+
+        // 重复提交同一绑定不会新增路由或命令记录，也不会丢失输入来源。
+        let rebound = settings.clone();
+        settings.bind_command(selection.clone(), Some(destination));
+        assert_eq!(settings, rebound);
+
+        settings.bind_command(selection.clone(), Some(RouteKey::Direct));
+        assert_eq!(settings.route(RouteKey::Direct).unwrap().input, InputSource::Speech);
+        assert_eq!(settings.binding(&selection), Some(RouteKey::Direct));
+        assert_eq!(settings.binding(&translate(SPEECH_TRANSLATE_ID)), Some(RouteKey::Direct));
+        assert!(settings.route(destination).is_none());
+    }
+
+    #[test]
+    fn shared_route_input_and_cleanup_follow_the_remaining_bindings() {
+        let mut settings = defaults();
+        let speech = translate(SPEECH_TRANSLATE_ID);
+        let selection = translate(SELECTION_TRANSLATE_ID);
+        let shared = RouteKey::Key { code: 77 };
+
+        settings.bind_command(speech.clone(), Some(shared));
+        settings.bind_command(selection.clone(), Some(shared));
+        settings.set_route_input(shared, InputSource::Selection);
+        assert_eq!(settings.route(settings.binding(&speech).unwrap()).unwrap().input, InputSource::Selection);
+        assert_eq!(settings.route(settings.binding(&selection).unwrap()).unwrap().input, InputSource::Selection);
+
+        settings.bind_command(speech.clone(), None);
+        assert_eq!(settings.route(shared).unwrap().input, InputSource::Selection);
+        settings.bind_command(selection, None);
+        assert!(settings.route(shared).is_none());
+        assert_eq!(settings.routes, vec![Route { key: RouteKey::Direct, input: InputSource::Speech }]);
+
+        // 没有旧绑定时是首次创建路由，默认来源由核心确定为语音。
+        settings.bind_command(speech.clone(), Some(shared));
+        assert_eq!(settings.route(shared).unwrap().input, InputSource::Speech);
+        settings.bind_command(speech, Some(RouteKey::Direct));
+        let unchanged = settings.clone();
+        settings.set_route_input(shared, InputSource::Selection);
+        assert_eq!(settings, unchanged);
     }
 }

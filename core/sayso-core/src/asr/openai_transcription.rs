@@ -31,7 +31,7 @@ pub(super) async fn run(
     }
 
     let url = format!("{}/audio/transcriptions", base_url.trim().trim_end_matches('/'));
-    if reqwest::Url::parse(&url).is_err() {
+    if !reqwest::Url::parse(&url).is_ok_and(|url| matches!(url.scheme(), "http" | "https")) {
         return Err(CoreError::Recognition(tr(
             &format!("识别服务地址无效：{base_url}"),
             &format!("Invalid recognition endpoint: {base_url}"),
@@ -53,14 +53,12 @@ pub(super) async fn run(
         .text("response_format", "json")
         .text("prompt", prompt);
 
-    let response = http
-        .post(url)
-        .bearer_auth(api_key)
-        .multipart(form)
-        .timeout(REQUEST_TIMEOUT)
-        .send()
-        .await
-        .map_err(server_error)?;
+    let mut request = http.post(url).multipart(form).timeout(REQUEST_TIMEOUT);
+    // 本地服务可不启用认证；仅配置密钥时发送 Authorization。
+    if !api_key.is_empty() {
+        request = request.bearer_auth(api_key);
+    }
+    let response = request.send().await.map_err(server_error)?;
     let status = response.status();
     let body = response.bytes().await.map_err(server_error)?;
     if !status.is_success() {

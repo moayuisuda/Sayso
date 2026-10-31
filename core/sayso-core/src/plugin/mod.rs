@@ -29,7 +29,7 @@ pub struct Plugin {
 #[derive(Clone, Debug)]
 pub enum PluginSource {
     /// 随 core 编译嵌入的内置插件。
-    BuiltIn { main: &'static str },
+    BuiltIn { main: &'static str, modules: &'static [(&'static str, &'static str)] },
     /// 安装在扩展目录中的插件。
     Installed { directory: PathBuf },
 }

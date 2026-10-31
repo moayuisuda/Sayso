@@ -6,6 +6,7 @@
 
 mod action;
 mod dispatch;
+mod speech;
 mod surface;
 
 use std::sync::Arc;
@@ -198,21 +199,25 @@ impl Inner {
         });
     }
 
-    pub(crate) fn dismiss(&self) {
-        self.update_session(|session| {
-            if matches!(session.phase, Phase::Presenting(_)) {
-                session.phase = Phase::Idle;
-            }
-        });
+    pub(crate) fn dismiss(&self, surface_id: Option<&str>) {
+        let mut session = self.session.lock().unwrap();
+        let Phase::Presenting(surface) = &session.phase else { return };
+        // 旧面板的事件既不改变下一轮会话，也不推送无效的状态通知。
+        if surface_id.is_some_and(|id| id != surface.id) {
+            return;
+        }
+        session.phase = Phase::Idle;
+        session.hovering = false;
+        self.observer.session_changed(SessionState::Idle);
     }
 
     pub(crate) fn set_hovering(&self, hovering: bool) {
-        self.update_session(|session| {
-            session.hovering = hovering;
-            if let (false, Phase::Presenting(surface)) = (hovering, &mut session.phase) {
-                surface.touch();
-            }
-        });
+        let mut session = self.session.lock().unwrap();
+        session.hovering = hovering;
+        if let (false, Phase::Presenting(surface)) = (hovering, &mut session.phase) {
+            surface.touch();
+        }
+        // 悬停只影响内部停留计时，不改变可见内容，无需再次推送会话状态。
     }
 
     // MARK: 流程
@@ -378,8 +383,8 @@ impl Inner {
         self.runtime.spawn(async move { endpoint.warm_up(&http).await });
     }
 
-    /// 按设置生成本次录音的识别配置；缺少必填项或识别器扩展不可用时为 None。
+    /// 按设置生成本次录音的识别配置；缺少必填项或来源不可用时为 None。
     fn asr_config(&self, settings: &Settings) -> Option<AsrConfig> {
-        source::config(settings, &self.secrets(), &self.extensions.read().unwrap())
+        source::config(settings, &self.secrets())
     }
 }

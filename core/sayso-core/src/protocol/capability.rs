@@ -14,8 +14,6 @@ pub enum Capability {
     Llm,
     /// 向其他扩展广播事件。
     Publish,
-    /// 录音时接收麦克风音频，作为语音识别器。
-    Audio,
     /// 读写扩展目录与用户指定路径中的文件（`sayso.fs`）。
     Fs,
 }
@@ -28,7 +26,6 @@ impl Capability {
             Self::Insert => "insert",
             Self::Llm => "llm",
             Self::Publish => "publish",
-            Self::Audio => "audio",
             Self::Fs => "fs",
         }
     }

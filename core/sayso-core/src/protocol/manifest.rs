@@ -15,13 +15,11 @@ pub struct Manifest {
     pub name: String,
     #[serde(default)]
     pub description: Option<String>,
-    /// 处理事件的 JS 模块，相对扩展目录。订阅了事件时必填。
-    #[serde(default)]
-    pub main: Option<String>,
+    /// 处理事件的 JS 模块，相对扩展目录，必填。
+    pub main: String,
     #[serde(default)]
     pub timeout_seconds: Option<u32>,
-    /// 订阅的事件；只提供识别器的扩展可以省略。
-    #[serde(default)]
+    /// 订阅的事件，至少一项。
     pub events: Vec<EventType>,
     #[serde(default)]
     pub capabilities: Vec<Capability>,
@@ -30,9 +28,6 @@ pub struct Manifest {
     /// 扩展提供的命令，由用户绑定到路由触发，以 `command` 事件交给本扩展。
     #[serde(default)]
     pub commands: Vec<CommandSpec>,
-    /// 扩展提供的语音识别器，可在语音识别设置中选用。
-    #[serde(default)]
-    pub recognizer: Option<RecognizerSpec>,
 }
 
 /// 扩展命令。输入来源由用户为路由设置，命令本身只接收统一的 `input.text`。
@@ -40,25 +35,6 @@ pub struct Manifest {
 pub struct CommandSpec {
     pub id: String,
     pub title: String,
-}
-
-/// 扩展提供的流式语音识别器：每次录音启动一次进程，录音期间持续收音频、回传识别文本。
-#[derive(Clone, Debug, PartialEq, Serialize, Deserialize, uniffi::Record)]
-#[serde(rename_all = "camelCase")]
-pub struct RecognizerSpec {
-    /// 显示在语音识别设置中的名称。
-    pub title: String,
-    /// 识别器可执行文件及参数。首项是路径时相对扩展目录解析，否则在 PATH 中查找。
-    pub command: Vec<String>,
-    /// 录音结束后等待最终结果的最长时间，默认 30 秒。
-    #[serde(default)]
-    pub finish_timeout_seconds: Option<u32>,
-}
-
-impl RecognizerSpec {
-    pub fn finish_timeout(&self) -> Duration {
-        Duration::from_secs(self.finish_timeout_seconds.unwrap_or(30).clamp(1, 120).into())
-    }
 }
 
 /// 扩展页签：按模板渲染扩展的某个数据集合。
@@ -118,22 +94,11 @@ impl Manifest {
         if self.is_built_in() != built_in {
             return fail(format!("id prefix {BUILT_IN_PREFIX} is reserved for built-in extensions"));
         }
-        if self.events.is_empty() && self.recognizer.is_none() {
-            return fail("no event subscribed and no recognizer provided".into());
+        if self.events.is_empty() {
+            return fail("at least one event subscription is required".into());
         }
-        if !self.events.is_empty() && self.main.as_deref().is_none_or(str::is_empty) {
-            return fail("main is required when subscribing to events".into());
-        }
-        if let Some(recognizer) = &self.recognizer {
-            if built_in {
-                return fail("built-in extensions cannot provide recognizers".into());
-            }
-            if !self.grants(Capability::Audio) {
-                return fail("recognizer requires the audio capability".into());
-            }
-            if recognizer.command.first().is_none_or(String::is_empty) || recognizer.title.is_empty() {
-                return fail("recognizer command and title are required".into());
-            }
+        if self.main.trim().is_empty() {
+            return fail("main is required".into());
         }
         if !self.commands.is_empty() {
             if !self.events.contains(&EventType::Command) {

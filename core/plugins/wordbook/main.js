@@ -6,11 +6,11 @@ const COLLECTION = "words";
 const ADD_ALL = "add-all";
 const chinese = sayso.languages.native.code === "zh";
 
-/** 不自动记录：把词对逐个列为带「加入生词本」按钮的词条。整句、整段翻译不是生词。 */
+/** 不自动记录：每个翻译或语法修正片段都提供加入入口，不因长度静默丢掉句子。 */
 export function translation(event) {
-  const entries = event.pairs
-    .filter((pair) => isWordOrPhrase(pair.target))
-    .map((pair) => ({ term: pair.target, gloss: pair.native, example: event.context ?? null, language: event.languages.target }));
+  const entries = event.pairs.map((pair) => ({
+    term: pair.target, gloss: pair.native, example: event.context ?? null, language: event.languages.target,
+  }));
   offer(entries);
 }
 
@@ -103,9 +103,4 @@ function pendingKeys(surface) {
 function key(entry) {
   const normalized = entry.term.replace(/^[\s\p{P}]+|[\s\p{P}]+$/gu, "").toLowerCase();
   return `${entry.language}|${normalized}`;
-}
-
-/** 单词、短语或习语：不超过 6 个词且不长于 40 个字符。 */
-function isWordOrPhrase(text) {
-  return text.trim().split(/\s+/).filter(Boolean).length <= 6 && [...text].length <= 40;
 }

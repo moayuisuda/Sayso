@@ -21,6 +21,7 @@ final class HotkeyMonitor {
         /// 按一下模式下轻点入口键，附带本次的路由。
         case toggle([RouteKey])
         case cancel
+        case dismiss(String)
     }
 
     var style: HotkeyStyle = .hold
@@ -30,6 +31,7 @@ final class HotkeyMonitor {
     /// 录制快捷键时暂停响应。
     var isPaused = false
     var isSessionActive: () -> Bool = { false }
+    var candidateSurface: (TimeInterval) -> String? = { _ in nil }
     var onAction: (Action) -> Void = { _ in }
 
     /// 单修饰键入口按下后的确认期，期间没有其他按键才认定为直接触发。
@@ -98,6 +100,12 @@ final class HotkeyMonitor {
                event.flags.intersection(Hotkey.standardModifierMask) == trigger.requiredFlags {
                 triggerDown(interrupted: false)
                 return nil
+            }
+            // 非激活面板收不到本地按键；全局监听只通知关闭，Enter 继续交给前台输入框。
+            if !isRepeat, !isTriggerHeld, (keyCode == UInt16(kVK_Return) || keyCode == UInt16(kVK_ANSI_KeypadEnter)),
+               event.flags.intersection(Hotkey.standardModifierMask).isEmpty,
+               let surface = candidateSurface(TimeInterval(event.timestamp) / 1_000_000_000) {
+                onAction(.dismiss(surface))
             }
             guard isTriggerHeld else { break }
             if keyCode == trigger.keyCode { return nil }  // 组合键入口的自动重复

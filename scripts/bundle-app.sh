@@ -2,6 +2,7 @@
 # 构建 Rust core 与 release 版本的宿主，打包为 Sayso.app。
 # 用法：bash scripts/bundle-app.sh            → 输出 build/Sayso.app
 #       INSTALL=1 bash scripts/bundle-app.sh  → 额外安装到 /Applications
+#       VERSION=1.2.0 bash scripts/bundle-app.sh → 写入版本号（发布流水线从 tag 传入）
 #
 # 签名：默认使用登录钥匙串中的 Apple Development 证书，可用 CODESIGN_IDENTITY 指定。
 # 证书签名的 designated requirement 是「Bundle ID + 证书」，重新打包后不变，
@@ -23,6 +24,12 @@ rm -rf "$APP"
 mkdir -p "$APP/Contents/MacOS" "$APP/Contents/Resources"
 cp "$BIN" "$APP/Contents/MacOS/Sayso"
 cp "$PROJECT_DIR/Resources/Info.plist" "$APP/Contents/Info.plist"
+if [ -n "${VERSION:-}" ]; then
+    /usr/libexec/PlistBuddy \
+        -c "Set :CFBundleShortVersionString $VERSION" \
+        -c "Set :CFBundleVersion $VERSION" \
+        "$APP/Contents/Info.plist"
+fi
 # 图标由 scripts/render-icons.swift 从 Resources/AppIcon.svg 生成。
 cp "$PROJECT_DIR/Resources/AppIcon.icns" "$APP/Contents/Resources/AppIcon.icns"
 

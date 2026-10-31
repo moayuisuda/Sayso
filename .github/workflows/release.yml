@@ -1,0 +1,65 @@
+# 推送 v* tag 时构建 macOS 与 Windows 安装包并发布到 GitHub Releases。
+# 版本号取自 tag（v1.2.0 → 1.2.0），写入 Info.plist 与 Sayso.exe。
+# runner 镜像已预装 Rust、Xcode 26 与 .NET 10 SDK。
+name: Release
+
+on:
+  push:
+    tags: ["v*"]
+
+permissions:
+  contents: write
+
+jobs:
+  test:
+    runs-on: macos-26
+    steps:
+      - uses: actions/checkout@v4
+      - run: cargo test --manifest-path core/Cargo.toml --workspace --locked
+
+  macos:
+    needs: test
+    runs-on: macos-26
+    steps:
+      - uses: actions/checkout@v4
+      # 流水线没有签名证书，bundle-app.sh 使用 ad-hoc 签名。
+      - name: Build Sayso.app
+        run: VERSION="${GITHUB_REF_NAME#v}" bash scripts/bundle-app.sh
+      - name: Package
+        run: ditto -c -k --keepParent build/Sayso.app "Sayso-${GITHUB_REF_NAME#v}-macOS-arm64.zip"
+      - uses: actions/upload-artifact@v4
+        with:
+          name: macos
+          path: Sayso-*-macOS-arm64.zip
+
+  windows:
+    needs: test
+    runs-on: windows-2025
+    steps:
+      - uses: actions/checkout@v4
+      - name: Build
+        run: ./scripts/build-windows.ps1 -Version ($env:GITHUB_REF_NAME.TrimStart('v'))
+      # 安装脚本与程序同包发布：解压后运行 install-windows.ps1 -Source app。
+      - name: Package
+        run: |
+          $version = $env:GITHUB_REF_NAME.TrimStart('v')
+          New-Item -ItemType Directory dist | Out-Null
+          Copy-Item build/windows dist/app -Recurse
+          Copy-Item scripts/install-windows.ps1, scripts/uninstall-windows.ps1 dist/
+          Compress-Archive -Path dist/* -DestinationPath "Sayso-$version-windows-x64.zip"
+      - uses: actions/upload-artifact@v4
+        with:
+          name: windows
+          path: Sayso-*-windows-x64.zip
+
+  release:
+    needs: [macos, windows]
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          merge-multiple: true
+      - name: Publish
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: gh release create "$GITHUB_REF_NAME" Sayso-*.zip --repo "$GITHUB_REPOSITORY" --title "$GITHUB_REF_NAME" --generate-notes

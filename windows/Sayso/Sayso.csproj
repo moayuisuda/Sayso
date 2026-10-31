@@ -17,6 +17,9 @@
     <ImplicitUsings>enable</ImplicitUsings>
     <AllowUnsafeBlocks>true</AllowUnsafeBlocks>
     <ApplicationIcon>Assets\Sayso.ico</ApplicationIcon>
+    <!-- 发布流水线用 tag 覆盖；安装脚本从 exe 读取并写入「已安装的应用」。 -->
+    <Version>0.1.0</Version>
+    <IncludeSourceRevisionInInformationalVersion>false</IncludeSourceRevisionInInformationalVersion>
     <RustProfile Condition="'$(RustProfile)' == ''">release</RustProfile>
   </PropertyGroup>
   <ItemGroup>

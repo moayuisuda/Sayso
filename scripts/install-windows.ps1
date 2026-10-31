@@ -17,7 +17,8 @@ $shortcut.Save()
 $uninstall = 'HKCU:/Software/Microsoft/Windows/CurrentVersion/Uninstall/Sayso'
 New-Item -Path $uninstall -Force | Out-Null
 New-ItemProperty -Path $uninstall -Name DisplayName -Value '言出 Sayso' -Force | Out-Null
-New-ItemProperty -Path $uninstall -Name DisplayVersion -Value '0.1.0' -Force | Out-Null
+$version = (Get-Item -LiteralPath (Join-Path $destination 'Sayso.exe')).VersionInfo.ProductVersion
+New-ItemProperty -Path $uninstall -Name DisplayVersion -Value $version -Force | Out-Null
 New-ItemProperty -Path $uninstall -Name InstallLocation -Value $destination -Force | Out-Null
 New-ItemProperty -Path $uninstall -Name DisplayIcon -Value (Join-Path $destination 'Assets/Sayso.ico') -Force | Out-Null
 $uninstallScript = Join-Path $destination 'uninstall-windows.ps1'

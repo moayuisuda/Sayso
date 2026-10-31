@@ -20,9 +20,11 @@ swift build -c release --package-path "$PROJECT_DIR"
 BIN="$(swift build -c release --package-path "$PROJECT_DIR" --show-bin-path)/Sayso"
 
 rm -rf "$APP"
-mkdir -p "$APP/Contents/MacOS"
+mkdir -p "$APP/Contents/MacOS" "$APP/Contents/Resources"
 cp "$BIN" "$APP/Contents/MacOS/Sayso"
 cp "$PROJECT_DIR/Resources/Info.plist" "$APP/Contents/Info.plist"
+# 图标由 scripts/render-icons.swift 从 Resources/AppIcon.svg 生成。
+cp "$PROJECT_DIR/Resources/AppIcon.icns" "$APP/Contents/Resources/AppIcon.icns"
 
 if [ -n "$IDENTITY" ]; then
     codesign --force --sign "$IDENTITY" "$APP"

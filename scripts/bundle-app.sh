@@ -4,8 +4,9 @@
 #       INSTALL=1 bash scripts/bundle-app.sh  → 额外安装到 /Applications
 #       VERSION=1.2.0 bash scripts/bundle-app.sh → 写入版本号（发布流水线从 tag 传入）
 #
-# 签名：默认使用登录钥匙串中的 Apple Development 证书，可用 CODESIGN_IDENTITY 指定
-# （发布流水线传入 Developer ID Application 证书，签名后再公证）。
+# 签名：可用 CODESIGN_IDENTITY 指定（发布流水线传入 Developer ID Application 证书，签名后再公证）。
+# 未指定时优先用登录钥匙串中的 Developer ID Application 证书，与发布版身份相同，
+# 本地构建与发布版之间切换不需要重新授权；没有时用 Apple Development 证书。
 # 证书签名的 designated requirement 是「Bundle ID + 证书」，重新打包后不变，
 # 系统授予的辅助功能与麦克风权限都不会失效。
 # 没有证书时退回 ad-hoc 签名：其身份是每次构建的 cdhash，重新打包后需要重新授权。
@@ -15,8 +16,9 @@ set -euo pipefail
 PROJECT_DIR="$(cd "$(dirname "$0")/.." && pwd)"
 APP="$PROJECT_DIR/build/Sayso.app"
 
-IDENTITY="${CODESIGN_IDENTITY:-$(security find-identity -v -p codesigning \
-    | awk -F'"' '/"Apple Development:/ {print $2; exit}')}"
+IDENTITIES="$(security find-identity -v -p codesigning)"
+IDENTITY="${CODESIGN_IDENTITY:-$(awk -F'"' '/"Developer ID Application:/ {print $2; exit}' <<< "$IDENTITIES")}"
+IDENTITY="${IDENTITY:-$(awk -F'"' '/"Apple Development:/ {print $2; exit}' <<< "$IDENTITIES")}"
 
 bash "$PROJECT_DIR/scripts/build-core.sh"
 swift build -c release --package-path "$PROJECT_DIR"
@@ -40,7 +42,7 @@ if [ -n "$IDENTITY" ]; then
     # 公证要求可信时间戳。
     codesign "${SIGN_FLAGS[@]}" --timestamp --sign "$IDENTITY" "$APP"
 else
-    echo "WARNING: no Apple Development identity found; using ad-hoc signing (permissions reset on every rebuild)." >&2
+    echo "WARNING: no signing identity found; using ad-hoc signing (permissions reset on every rebuild)." >&2
     codesign "${SIGN_FLAGS[@]}" --sign - "$APP"
 fi
 codesign --verify "$APP"

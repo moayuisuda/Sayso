@@ -77,7 +77,15 @@ git push origin v0.2.0
 
 流水线先跑 core 测试，再分别构建 `Sayso-<版本>-macOS-arm64.zip`（`Sayso.app`）与 `Sayso-<版本>-windows-x64.zip`（`app/` 程序目录加安装、卸载脚本），最后创建同名 GitHub Release 并附上两个压缩包。版本号取自 tag，写入 `Info.plist` 与 `Sayso.exe`，「已安装的应用」中的版本由安装脚本从 `Sayso.exe` 读取。
 
-流水线没有签名证书，macOS 包为 ad-hoc 签名、未经公证，且只包含 Apple 芯片版本。
+macOS 包只包含 Apple 芯片版本，用 Developer ID Application 证书签名（开启 Hardened Runtime，权限声明见 `Resources/Sayso.entitlements`）并经 Apple 公证，公证票据钉在 app 中。仓库需要配置以下 secrets：
+
+| Secret | 内容 |
+| --- | --- |
+| `CSC_LINK` | Developer ID Application 证书导出的 `.p12`，base64 编码 |
+| `CSC_KEY_PASSWORD` | `.p12` 的密码 |
+| `APPLE_ID` | 提交公证的 Apple ID |
+| `APPLE_APP_SPECIFIC_PASSWORD` | 该 Apple ID 的 App 专用密码 |
+| `APPLE_TEAM_ID` | 开发者团队 ID |
 
 ## 数据位置
 

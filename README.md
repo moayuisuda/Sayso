@@ -6,8 +6,8 @@
 
 **说你正在学的语言，卡住的词用母语补上。**
 
-面向外语学习者的语音输入法。混在句子里的母语会按整句语境译成目标语言后写入，<br>
-译文在候选框中高亮、朗读，并可收入生词本。
+面向外语学习者的语音输入法。混在句子里的母语会翻译为目标语言后写入，<br>
+译文在候选框中高亮、朗读，并可收入生词本，放入本地笔记，甚至自定义处理。
 
 ![macOS 14+](https://img.shields.io/badge/macOS-14%2B-3F51B5?style=flat-square&logo=apple&logoColor=white)
 ![Windows 10 2004+](https://img.shields.io/badge/Windows-10%202004%2B-3F51B5?style=flat-square&logo=windows&logoColor=white)
@@ -84,7 +84,7 @@ flowchart LR
     Runtime <--> Ext
 ```
 
-- **Rust core** 是设置、识别、翻译、扩展与会话逻辑的唯一实现。macOS 通过 UniFFI 绑定调用，Windows 通过一层窄 C ABI 调用，两端行为一致。
+- **Rust core** 是设置、识别、翻译、扩展与会话逻辑的运行时公用核心。macOS 通过 UniFFI 绑定调用，Windows 通过一层窄 C ABI 调用，两端行为一致。
 - **原生宿主**只提供平台能力与界面：全局热键、录音、读取选区、写入前台应用、系统朗读、密钥存储，以及候选框和设置窗口。
 - **扩展**运行在 core 内嵌的 QuickJS 中，通过 `sayso.*` API 往候选框添加内容、读写自己的数据、写入文字或调用已配置的大模型。
 
@@ -111,15 +111,9 @@ flowchart LR
 
 ### macOS
 
-需要 macOS 14+ 与 Apple 芯片。解压后将 `Sayso.app` 移入「应用程序」。
+需要 macOS 14+ 与 Apple 芯片。解压后将 `Sayso.app` 移入「应用程序」。安装包已用 Developer ID 签名并经 Apple 公证。
 
-安装包未经 Apple 公证，首次打开会被拦截。可在「系统设置 → 隐私与安全性」底部点击「仍要打开」，或运行：
-
-```bash
-xattr -dr com.apple.quarantine /Applications/Sayso.app
-```
-
-启动后按提示授予**麦克风**与**辅助功能**权限（用于全局快捷键、读取选区和写入文字）。每次更新后需重新授予辅助功能权限。
+启动后按提示授予**麦克风**与**辅助功能**权限（用于全局快捷键、读取选区和写入文字），更新版本后权限保持有效。
 
 ### Windows
 

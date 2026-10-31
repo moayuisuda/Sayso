@@ -14,9 +14,9 @@ core/                     Rust core（macOS 与 Windows 共用）
 │   ├── llm/                OpenAI 兼容 / Anthropic 客户端、服务预设、思考强度、连接预热
 │   ├── extensions.rs       扩展启停、命令路由、广播对象
 │   ├── store.rs            扩展数据存储（串行、原子落盘）
-│   ├── settings.rs         设置（settings.json；密钥经平台安全存储）
+│   ├── settings.rs         设置（settings.json）与密钥（config.json）
 │   ├── package.rs          `.sayso` 扩展包
-│   └── platform.rs         平台适配层接口：录音、选区、写入、朗读、安全存储与状态推送
+│   └── platform.rs         平台适配层接口：录音、选区、写入、朗读与状态推送
 ├── plugins/              内置扩展「语音翻译」「划词翻译」「生词本」（JS，编译时嵌入）
 └── sayso-windows-bridge/  Windows 的 C ABI：请求、状态回调与可取消的平台异步调用
 Sources/
@@ -31,7 +31,7 @@ Sources/
     └── UI/                 候选框、块组件、设置窗口、扩展管理与扩展页签
 windows/Sayso/            Windows 原生宿主（C# / WinUI 3）
 ├── Interop/                Rust 核心实例、ABI 内存管理与串行设置事务
-├── Platform/               WASAPI 录音、全局热键、剪贴板、SAPI 朗读、凭据管理器、托盘与单实例
+├── Platform/               WASAPI 录音、全局热键、剪贴板、SAPI 朗读、托盘与单实例
 └── UI/                     与 macOS 一致的 Indigo 主题、顶部页签、紧凑卡片与 Acrylic 候选框
 ```
 
@@ -94,7 +94,7 @@ macOS 包只包含 Apple 芯片版本，用 Developer ID Application 证书签�
 | 设置 | `~/Library/Application Support/Sayso/settings.json` | `%LOCALAPPDATA%\Sayso\settings.json` |
 | 外部扩展 | `~/Library/Application Support/Sayso/Extensions/` | `%LOCALAPPDATA%\Sayso\Extensions\` |
 | 扩展数据 | `~/Library/Application Support/Sayso/ExtensionData/<扩展 id>/` | `%LOCALAPPDATA%\Sayso\ExtensionData\<扩展 id>\` |
-| API Key | 登录钥匙串 | Windows 凭据管理器 |
+| API Key | `~/Library/Application Support/Sayso/config.json` | `%LOCALAPPDATA%\Sayso\config.json` |
 
 生词本数据为 `ExtensionData/sayso.wordbook/words.json`。
 

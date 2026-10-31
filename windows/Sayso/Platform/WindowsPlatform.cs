@@ -7,10 +7,9 @@ using Sayso.Interop;
 
 namespace Sayso.Platform;
 
-internal sealed class WindowsPlatform(DispatcherQueue dispatcher, string credentialService = "Sayso") : IDisposable
+internal sealed class WindowsPlatform(DispatcherQueue dispatcher) : IDisposable
 {
     private readonly SpeechSynthesizer speech = new();
-    private readonly CredentialStore credentials = new(credentialService);
     private readonly object speechLock = new();
     private AudioRecorder? audio;
     public float AudioLevel => audio?.Level ?? 0;
@@ -31,8 +30,6 @@ internal sealed class WindowsPlatform(DispatcherQueue dispatcher, string credent
                 audio.Start();
                 return null;
             case "stopAudio": audio?.Stop(); return null;
-            case "secretRead": return JsonValue.Create(credentials.Read(args!.GetValue<string>()));
-            case "secretWrite": credentials.Write(args!["account"]!.GetValue<string>(), args["value"]?.GetValue<string>()); return null;
             case "frontmostApp":
                 var window = NativeMethods.GetForegroundWindow();
                 NativeMethods.GetWindowThreadProcessId(window, out var process);

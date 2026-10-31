@@ -61,7 +61,8 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let cases: Vec<Case> = serde_json::from_slice(&std::fs::read(&args[2])?)?;
     let mut key = String::new();
     std::io::stdin().lock().read_line(&mut key)?;
-    let secrets = Secrets([(SecretSlot::Llm { provider: settings.llm_provider }, key.trim().into())].into());
+    let mut secrets = Secrets::default();
+    secrets.set(SecretSlot::Llm { provider: settings.llm_provider }, key.trim().into());
     let endpoint = llm_endpoint(&settings, &secrets).ok_or("Incomplete LLM configuration")?;
     let plugins = built_in_plugins();
     let plugin = plugins.iter().find(|plugin| plugin.id() == "sayso.dictation").unwrap();

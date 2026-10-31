@@ -26,18 +26,6 @@ internal static class SmokeTests
             if (disk["targetLanguage"]!.GetValue<string>() != "ja") throw new Exception("Settings were not persisted.");
             await core.Call("updateSettings", original);
         });
-        await Check("Windows Credential Manager roundtrip", () => Task.Run(() =>
-        {
-            var credentials = new CredentialStore($"Sayso.Smoke.{Environment.ProcessId}");
-            var account = "smoke." + Guid.NewGuid();
-            try
-            {
-                credentials.Write(account, "Sayso-测试-🔐");
-                if (credentials.Read(account) != "Sayso-测试-🔐") throw new Exception("Credential mismatch.");
-            }
-            finally { credentials.Write(account, null); }
-            if (credentials.Read(account) is not null) throw new Exception("Credential deletion failed.");
-        }));
         await Check("Windows clipboard Unicode roundtrip and restoration", async () =>
         {
             var saved = await ClipboardService.Snapshot();

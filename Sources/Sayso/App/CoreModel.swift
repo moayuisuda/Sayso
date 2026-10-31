@@ -66,15 +66,21 @@ final class CoreModel {
         Binding(get: { self.settings[keyPath: keyPath] }, set: { value in self.update { $0[keyPath: keyPath] = value } })
     }
 
-    /// 密钥存在钥匙串中，由 core 读写。读取时依赖 `settings`，保存后随设置变化通知刷新。
+    /// 密钥存在 config.json 中，由 core 读写。读取时依赖 `settings`，保存后随设置变化通知刷新。
     func secret(_ slot: SecretSlot) -> Binding<String> {
         Binding(
             get: { _ = self.settings; return self.core.secret(slot: slot) },
-            set: { self.core.setSecret(slot: slot, value: $0) }
+            set: { value in
+                do {
+                    try self.core.setSecret(slot: slot, value: value)
+                } catch {
+                    self.logger.error("saving secret failed: \(error.localizedDescription, privacy: .public)")
+                }
+            }
         )
     }
 
-    /// 识别来源配置项的取值。存在钥匙串还是设置中由 core 按配置项类型决定；读取依赖 `settings`，保存后随设置变化通知刷新。
+    /// 识别来源配置项的取值。存在密钥文件还是设置中由 core 按配置项类型决定；读取依赖 `settings`，保存后随设置变化通知刷新。
     func asrValue(source: String, field: String) -> Binding<String> {
         Binding(
             get: { _ = self.settings; return self.core.asrValue(sourceId: source, fieldKey: field) },

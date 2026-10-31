@@ -46,7 +46,7 @@ internal sealed partial class SettingsWindow
                 Controls.Row(L("语速", "Speed"), Controls.Horizontal(rate, Controls.Button(L("试听", "Preview"), () => Run(() => Task.Run(() => platform!.Speak("Practice makes perfect.", "en-US", (float)rate.Value))))))),
             Controls.Section(L("权限", "Permissions"),
                 Controls.Row(L("麦克风", "Microphone"), Controls.Button(L("打开麦克风设置", "Microphone settings"), () => WindowsPlatform.Open("ms-settings:privacy-microphone")), L("请允许桌面应用访问麦克风。录音只在快捷键触发时进行。", "Allow desktop apps to access the microphone. Recording starts only when triggered.")),
-                Controls.Row(L("数据文件夹", "Data folder"), Controls.Button(L("打开文件夹", "Open folder"), () => WindowsPlatform.Open(App.DataDirectory)), L("API Key 保存在 Windows 凭据管理器中。", "API keys are stored in Windows Credential Manager.")))
+                Controls.Row(L("数据文件夹", "Data folder"), Controls.Button(L("打开文件夹", "Open folder"), () => WindowsPlatform.Open(App.DataDirectory)), L("API Key 保存在数据文件夹的 config.json 中。", "API keys are stored in config.json in the data folder.")))
         );
     }
 

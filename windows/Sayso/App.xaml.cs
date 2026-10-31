@@ -41,7 +41,7 @@ public partial class App : Application
         try
         {
             Directory.CreateDirectory(DataDirectory);
-            platform = new WindowsPlatform(Microsoft.UI.Dispatching.DispatcherQueue.GetForCurrentThread(), arguments.Contains("--smoke-test") ? $"Sayso.Smoke.{Environment.ProcessId}" : "Sayso");
+            platform = new WindowsPlatform(Microsoft.UI.Dispatching.DispatcherQueue.GetForCurrentThread());
             core = await Task.Run(() => new CoreClient(DataDirectory, platform.Handle));
             platform.Core = core;
             settings = new SettingsWindow(core, platform);

@@ -1,7 +1,7 @@
-//! 应用设置的唯一数据源：普通字段存 `settings.json`，API Key 经平台的安全存储（macOS 钥匙串）读写。
+//! 应用设置的唯一数据源：普通字段存 `settings.json`，API Key 存 `config.json`。
 
 use std::collections::HashMap;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 
 use serde::{Deserialize, Serialize};
 
@@ -83,7 +83,7 @@ pub struct Settings {
     /// 扩展输出朗读指令时自动朗读。
     pub auto_speak: bool,
     pub speech_rate: f32,
-    /// 选用的识别服务 id，服务配置通过 asr_options 与安全存储读取。
+    /// 选用的识别服务 id，服务配置通过 asr_options 与密钥文件读取。
     pub asr_source: String,
     /// 各识别来源的非密钥配置项，按来源 id、配置项 key 存储；从未填写过的配置项取来源声明的默认值。
     pub asr_options: HashMap<String, HashMap<String, String>>,
@@ -190,7 +190,7 @@ impl Settings {
     }
 }
 
-/// 安全存储中的密钥项。账户名是持久化键，不可修改。
+/// 密钥项。账户名是 `config.json` 中的键，不可修改。
 #[derive(Clone, Debug, PartialEq, Eq, Hash, uniffi::Enum)]
 pub enum SecretSlot {
     /// 识别来源的密钥类配置项。
@@ -205,22 +205,39 @@ impl SecretSlot {
             Self::Llm { provider } => format!("llm.{}", provider.key()),
         }
     }
-
-    /// 启动时读入的全部密钥项。
-    pub fn all() -> Vec<SecretSlot> {
-        let mut slots = source::secret_slots();
-        slots.extend(LlmProvider::ALL.into_iter().map(|provider| Self::Llm { provider }));
-        slots
-    }
 }
 
-/// 启动时从平台安全存储读入的全部密钥，写入时同步回平台。
-#[derive(Default)]
-pub struct Secrets(pub HashMap<SecretSlot, String>);
+/// 全部 API Key，按账户名存于 `config.json`，与可分享的 `settings.json` 分开。
+/// 文件位于仅当前用户可访问的应用数据目录中。
+#[derive(Default, Serialize, Deserialize)]
+pub struct Secrets(HashMap<String, String>);
 
 impl Secrets {
+    pub fn load(path: &Path) -> Self {
+        match std::fs::read(path) {
+            Ok(data) => serde_json::from_slice(&data).unwrap_or_else(|error| {
+                log::error!("secrets file unreadable: {error}");
+                Self::default()
+            }),
+            Err(_) => Self::default(),
+        }
+    }
+
+    pub fn save(&self, path: &Path) -> std::io::Result<()> {
+        write_atomically(path, &serde_json::to_vec_pretty(self).expect("secrets are serializable"))
+    }
+
     pub fn get(&self, slot: SecretSlot) -> String {
-        self.0.get(&slot).cloned().unwrap_or_default()
+        self.0.get(&slot.account()).cloned().unwrap_or_default()
+    }
+
+    /// 空字符串删除该项。
+    pub fn set(&mut self, slot: SecretSlot, value: String) {
+        if value.is_empty() {
+            self.0.remove(&slot.account());
+        } else {
+            self.0.insert(slot.account(), value);
+        }
     }
 }
 

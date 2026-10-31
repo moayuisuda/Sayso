@@ -7,7 +7,7 @@
 # 签名：默认使用登录钥匙串中的 Apple Development 证书，可用 CODESIGN_IDENTITY 指定
 # （发布流水线传入 Developer ID Application 证书，签名后再公证）。
 # 证书签名的 designated requirement 是「Bundle ID + 证书」，重新打包后不变，
-# 系统授予的辅助功能、麦克风权限与钥匙串访问都不会失效。
+# 系统授予的辅助功能与麦克风权限都不会失效。
 # 没有证书时退回 ad-hoc 签名：其身份是每次构建的 cdhash，重新打包后需要重新授权。
 # 始终开启 Hardened Runtime，本地构建与公证版本的运行时限制一致。
 set -euo pipefail

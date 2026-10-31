@@ -1,7 +1,7 @@
 import AppKit
 import SaysoCore
 
-/// macOS 平台适配：core 通过它录音、读取选区、写入前台应用、朗读、访问剪贴板与钥匙串。
+/// macOS 平台适配：core 通过它录音、读取选区、写入前台应用、朗读与访问剪贴板。
 /// core 可能在任意线程调用这些方法，需要主线程的能力在这里切换。
 final class MacPlatform: Platform, @unchecked Sendable {
     let pronouncer: Pronouncer
@@ -63,15 +63,6 @@ final class MacPlatform: Platform, @unchecked Sendable {
             guard let url = URL(string: url) else { return }
             NSWorkspace.shared.open(url)
         }
-    }
-
-    func secretRead(account: String) -> String? {
-        let value = KeychainStore.read(account)
-        return value.isEmpty ? nil : value
-    }
-
-    func secretWrite(account: String, value: String?) {
-        KeychainStore.write(value ?? "", for: account)
     }
 }
 

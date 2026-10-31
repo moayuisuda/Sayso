@@ -114,12 +114,6 @@ impl Platform for Host {
     fn open_url(&self, url: String) {
         self.notify("openUrl", json!(url));
     }
-    fn secret_read(&self, account: String) -> Option<String> {
-        self.call("secretRead", json!(account)).ok().and_then(|v| v.as_str().map(str::to_owned))
-    }
-    fn secret_write(&self, account: String, value: Option<String>) {
-        self.notify("secretWrite", json!({"account":account,"value":value}));
-    }
 }
 
 fn session_json(state: SessionState) -> Value {
@@ -199,7 +193,7 @@ impl Bridge {
             "asrValue" => Ok(json!(core.asr_value(text(&args,"source")?,text(&args,"field")?))),
             "setAsrValue" => { core.set_asr_value(text(&args,"source")?,text(&args,"field")?,text(&args,"value")?).map_err(|e|e.to_string())?; Ok(Value::Null) }
             "secret" => Ok(json!(core.secret(SecretSlot::Llm{provider:decode(args)?}))),
-            "setSecret" => { core.set_secret(SecretSlot::Llm{provider:decode(args["provider"].clone())?},text(&args,"value")?); Ok(Value::Null) }
+            "setSecret" => { core.set_secret(SecretSlot::Llm{provider:decode(args["provider"].clone())?},text(&args,"value")?).map_err(|e|e.to_string())?; Ok(Value::Null) }
             "testLlm" => self.runtime.block_on(core.test_llm()).map(|v|json!(v)).map_err(|e|e.to_string()),
             "extensions" => Ok(json!(core.extensions().into_iter().map(|e| {
                 let result=e.last_result.map(|r| {

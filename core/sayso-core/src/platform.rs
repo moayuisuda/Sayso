@@ -1,4 +1,4 @@
-//! 平台适配层：各平台各自实现的能力（录音、选区、写入前台应用、朗读、安全存储）与状态推送。
+//! 平台适配层：各平台各自实现的能力（录音、选区、写入前台应用、朗读）与状态推送。
 //! macOS 由 Swift 实现，Windows 将由 C# 实现；core 只通过这里的接口使用它们。
 
 use crate::protocol::{AppInfo, Delivery, Language};
@@ -34,9 +34,6 @@ pub trait Platform: Send + Sync {
     fn stop_speaking(&self);
     fn copy_text(&self, text: String);
     fn open_url(&self, url: String);
-    fn secret_read(&self, account: String) -> Option<String>;
-    /// 写入密钥；`None` 删除。
-    fn secret_write(&self, account: String, value: Option<String>);
 }
 
 /// core 状态变化的推送。回调在 core 的内部线程上同步发生并保持顺序：

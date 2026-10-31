@@ -1,7 +1,7 @@
 //! 语音识别来源注册表：统一配置云端服务与通过 URL 接入的本地服务。
 //!
 //! 每个来源声明自己的配置项，设置中只存「选用的来源 + 各配置项的取值」，界面按声明通用渲染。
-//! 密钥类配置项存平台安全存储，其余存 `settings.json`。只有线上协议按服务分别实现（见各服务模块）。
+//! 密钥类配置项存 `config.json`，其余存 `settings.json`。只有线上协议按服务分别实现（见各服务模块）。
 
 use std::collections::HashMap;
 
@@ -46,7 +46,7 @@ pub struct AsrField {
 
 #[derive(Clone, Debug, PartialEq, uniffi::Enum)]
 pub enum AsrFieldKind {
-    /// 存于平台安全存储。
+    /// 存于 `config.json`。
     Secret,
     Text,
     Choice {
@@ -221,26 +221,11 @@ pub(crate) fn sources() -> Vec<AsrSource> {
     Service::ALL.into_iter().map(Service::source).collect()
 }
 
-/// 内置来源的全部密钥项，启动时从安全存储读入。
-pub(crate) fn secret_slots() -> Vec<SecretSlot> {
-    Service::ALL
-        .into_iter()
-        .flat_map(|service| {
-            let source = service.source();
-            source
-                .fields
-                .into_iter()
-                .filter(|field| field.kind == AsrFieldKind::Secret)
-                .map(move |field| SecretSlot::Asr { source: source.id.clone(), field: field.key })
-        })
-        .collect()
-}
-
 pub(crate) fn find(id: &str) -> Option<AsrSource> {
     Service::find(id).map(Service::source)
 }
 
-/// 配置项的当前取值：密钥取自安全存储，其余取自设置；从未填写过时为默认值。
+/// 配置项的当前取值：密钥取自密钥文件，其余取自设置；从未填写过时为默认值。
 pub(crate) fn field_value(source_id: &str, field: &AsrField, settings: &Settings, secrets: &Secrets) -> String {
     match field.kind {
         AsrFieldKind::Secret => secrets.get(SecretSlot::Asr { source: source_id.into(), field: field.key.clone() }),
@@ -285,8 +270,9 @@ mod tests {
     }
 
     fn secret(source: &str, value: &str) -> Secrets {
-        let slot = SecretSlot::Asr { source: source.into(), field: API_KEY.into() };
-        Secrets(HashMap::from([(slot, value.into())]))
+        let mut secrets = Secrets::default();
+        secrets.set(SecretSlot::Asr { source: source.into(), field: API_KEY.into() }, value.into());
+        secrets
     }
 
     #[test]

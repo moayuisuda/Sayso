@@ -54,7 +54,7 @@
 | 语音识别 | 火山引擎（仅中英混说）、阿里云百炼千问、Soniox（以上为流式识别），以及任意兼容 OpenAI `/audio/transcriptions` 的服务 |
 | 翻译 | OpenAI、Claude、DeepSeek、火山方舟、百炼、Kimi、智谱、Gemini、OpenRouter、Ollama，以及自定义 OpenAI 兼容服务 |
 
-API Key 保存在系统钥匙串（Windows 为凭据管理器），不写入配置文件。
+API Key 单独保存在数据目录的 `config.json` 中，不写入 `settings.json`。
 
 > [!TIP]
 > 使用本地语音模型：启动兼容 `/audio/transcriptions` 的服务后，在「模型配置 → 语音模型」选择「OpenAI 兼容 / 本地服务」，填写 Base URL（如 `http://127.0.0.1:8000/v1`）与模型名；无需认证时 API Key 留空。
@@ -85,7 +85,7 @@ flowchart LR
 ```
 
 - **Rust core** 是设置、识别、翻译、扩展与会话逻辑的运行时公用核心。macOS 通过 UniFFI 绑定调用，Windows 通过一层窄 C ABI 调用，两端行为一致。
-- **原生宿主**只提供平台能力与界面：全局热键、录音、读取选区、写入前台应用、系统朗读、密钥存储，以及候选框和设置窗口。
+- **原生宿主**只提供平台能力与界面：全局热键、录音、读取选区、写入前台应用、系统朗读，以及候选框和设置窗口。
 - **扩展**运行在 core 内嵌的 QuickJS 中，通过 `sayso.*` API 往候选框添加内容、读写自己的数据、写入文字或调用已配置的大模型。
 
 代码结构、混说翻译的实现细节与测试方法见 [开发说明](docs/development.md)。

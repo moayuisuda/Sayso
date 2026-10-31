@@ -22,6 +22,7 @@ use crate::store::{StoreWrite, Stores};
 /// 数据目录布局，与此前版本一致：已安装扩展与扩展数据都在其中。
 struct Paths {
     settings: PathBuf,
+    secrets: PathBuf,
     extensions: PathBuf,
 }
 
@@ -119,17 +120,16 @@ impl Core {
         observer: Arc<dyn CoreObserver>,
     ) -> Result<Arc<Self>, CoreError> {
         let root = PathBuf::from(data_dir);
-        let paths = Paths { settings: root.join("settings.json"), extensions: root.join("Extensions") };
+        let paths = Paths {
+            settings: root.join("settings.json"),
+            secrets: root.join("config.json"),
+            extensions: root.join("Extensions"),
+        };
         std::fs::create_dir_all(&paths.extensions)?;
 
         let settings = settings::load(&paths.settings, defaults);
         set_native_language(settings.native_language);
-        let secrets = SecretSlot::all()
-            .into_iter()
-            .filter_map(|slot| {
-                platform.secret_read(slot.account()).filter(|value| !value.is_empty()).map(|v| (slot, v))
-            })
-            .collect();
+        let secrets = Secrets::load(&paths.secrets);
         let runtime = tokio::runtime::Builder::new_multi_thread().enable_all().thread_name("sayso-core").build()?;
         let http = reqwest::Client::builder().build().map_err(|error| CoreError::Io(error.to_string()))?;
 
@@ -140,7 +140,7 @@ impl Core {
             stores: Stores::new(root.join("ExtensionData")),
             paths,
             settings: RwLock::new(settings),
-            secrets: RwLock::new(Secrets(secrets)),
+            secrets: RwLock::new(secrets),
             session: Mutex::new(Session::default()),
             audio: Mutex::default(),
             staged_packages: Mutex::default(),
@@ -247,20 +247,14 @@ impl Core {
         self.inner.secrets().get(slot)
     }
 
-    /// 保存密钥到平台安全存储；空字符串删除。
-    pub fn set_secret(&self, slot: SecretSlot, value: String) {
-        let value = value.trim().to_string();
-        let account = slot.account();
+    /// 保存密钥到 `config.json`；空字符串删除。
+    pub fn set_secret(&self, slot: SecretSlot, value: String) -> Result<(), CoreError> {
         let mut secrets = self.inner.secrets.write().unwrap();
-        if value.is_empty() {
-            secrets.0.remove(&slot);
-            self.inner.platform.secret_write(account, None);
-        } else {
-            secrets.0.insert(slot, value.clone());
-            self.inner.platform.secret_write(account, Some(value));
-        }
+        secrets.set(slot, value.trim().to_string());
+        secrets.save(&self.inner.paths.secrets)?;
         drop(secrets);
         self.inner.observer.settings_changed();
+        Ok(())
     }
 
     // MARK: 识别来源
@@ -277,12 +271,11 @@ impl Core {
         source::field_value(&source_id, &field, &settings, &self.inner.secrets())
     }
 
-    /// 保存识别来源的配置项：密钥类存平台安全存储，其余存设置。
+    /// 保存识别来源的配置项：密钥类存密钥文件，其余存设置。
     pub fn set_asr_value(&self, source_id: String, field_key: String, value: String) -> Result<(), CoreError> {
         let Some(field) = self.asr_field(&source_id, &field_key) else { return Ok(()) };
         if field.kind == AsrFieldKind::Secret {
-            self.set_secret(SecretSlot::Asr { source: source_id, field: field_key }, value);
-            return Ok(());
+            return self.set_secret(SecretSlot::Asr { source: source_id, field: field_key }, value);
         }
         self.inner.modify_settings(|settings| {
             settings.asr_options.entry(source_id).or_default().insert(field_key, value);

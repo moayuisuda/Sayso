@@ -10,7 +10,8 @@ use async_trait::async_trait;
 use sayso_core::asr::source::OPENAI_COMPATIBLE;
 use sayso_core::protocol::{ActionKind, AppInfo, BlockAction, BlockContent, Delivery, InputSource, Language};
 use sayso_core::session::{SessionState, SurfaceView};
-use sayso_core::settings::{CommandKey, Hotkey, PlatformDefaults, RouteKey};
+use sayso_core::llm::LlmProvider;
+use sayso_core::settings::{CommandKey, Hotkey, PlatformDefaults, RouteKey, SecretSlot};
 use sayso_core::{Core, CoreObserver, Platform, PlatformError};
 
 const SELECTION_KEY: u16 = 17;
@@ -75,10 +76,6 @@ impl Platform for FakePlatform {
     fn stop_speaking(&self) {}
     fn copy_text(&self, _text: String) {}
     fn open_url(&self, _url: String) {}
-    fn secret_read(&self, _account: String) -> Option<String> {
-        None
-    }
-    fn secret_write(&self, _account: String, _value: Option<String>) {}
 }
 
 #[derive(Default)]
@@ -505,4 +502,21 @@ fn concurrent_route_edits_preserve_both_commands_and_persist() {
     )
     .unwrap();
     assert_eq!(persisted, settings);
+}
+
+#[test]
+fn secrets_persist_to_config_file_and_clear_on_empty() {
+    let (data, core, _, _, _server) = fixture(Some(""));
+    let slot = SecretSlot::Llm { provider: LlmProvider::Openai };
+    let read = || {
+        serde_json::from_slice::<serde_json::Value>(&std::fs::read(data.path().join("config.json")).unwrap()).unwrap()
+    };
+
+    core.set_secret(slot.clone(), " sk-test ".into()).unwrap();
+    assert_eq!(core.secret(slot.clone()), "sk-test");
+    assert_eq!(read()["llm.openai"], "sk-test");
+
+    core.set_secret(slot.clone(), "".into()).unwrap();
+    assert_eq!(core.secret(slot), "");
+    assert!(read().get("llm.openai").is_none());
 }

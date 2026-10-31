@@ -1,0 +1,10 @@
+{
+  "schemaVersion": 3,
+  "id": "com.sayso.example.obsidian",
+  "name": "Obsidian 记录 / Obsidian Log",
+  "description": "把每次写入的文字追加到 Obsidian 当天的笔记 / Appends everything Sayso types to today's note in your Obsidian vault",
+  "main": "main.js",
+  "timeoutSeconds": 5,
+  "events": ["inserted"],
+  "capabilities": ["blocks", "fs"]
+}

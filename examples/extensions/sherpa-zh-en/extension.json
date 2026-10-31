@@ -1,0 +1,12 @@
+{
+  "schemaVersion": 3,
+  "id": "com.sayso.example.sherpa-zh-en",
+  "name": "本地中英识别 / Local zh-en Recognizer",
+  "description": "用 sherpa-onnx 中英双语流式模型在本机实时识别，不联网 / Offline real-time recognition with the sherpa-onnx bilingual streaming model",
+  "capabilities": ["audio"],
+  "recognizer": {
+    "title": "本地 Zipformer 中英双语",
+    "command": ["./python/bin/python3", "recognize.py"],
+    "finishTimeoutSeconds": 10
+  }
+}

@@ -1,0 +1,5 @@
+# Swift 绑定：生成的 Swift 模块为 SaysoCore，C 头文件模块为 SaysoCoreFFI（打包进 xcframework）。
+[bindings.swift]
+module_name = "SaysoCore"
+ffi_module_name = "SaysoCoreFFI"
+ffi_module_filename = "SaysoCoreFFI"

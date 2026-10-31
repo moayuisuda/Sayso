@@ -1,0 +1,27 @@
+{
+  "schemaVersion": 3,
+  "id": "com.sayso.example.todo",
+  "name": "待办 / Todo",
+  "description": "说一句话或选中一段文字，记为待办，显示在「待办」页签 / Say a sentence or select text to add it to a Todo tab",
+  "main": "main.js",
+  "timeoutSeconds": 5,
+  "events": ["command"],
+  "capabilities": ["blocks", "store"],
+  "commands": [{ "id": "add", "title": "添加待办 / Add todo" }],
+  "tab": {
+    "title": "待办",
+    "icon": "checklist",
+    "collection": "todos",
+    "item": {
+      "type": "card",
+      "title": "{{text}}",
+      "subtitle": "{{app}}"
+    },
+    "searchFields": ["text"],
+    "sort": { "field": "createdAt", "order": "desc" },
+    "itemActions": [
+      { "type": "copy", "text": "{{text}}" },
+      { "type": "delete", "label": "完成" }
+    ]
+  }
+}

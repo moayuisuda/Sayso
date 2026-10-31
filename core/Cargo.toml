@@ -1,0 +1,6 @@
+[workspace]
+resolver = "2"
+members = ["sayso-core", "uniffi-bindgen"]
+
+[workspace.dependencies]
+uniffi = { version = "0.32.2", features = ["tokio"] }

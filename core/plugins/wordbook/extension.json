@@ -1,0 +1,18 @@
+{
+  "schemaVersion": 3,
+  "id": "sayso.wordbook",
+  "name": "生词本 / Wordbook",
+  "description": "把翻译出的单词、短语加入生词本 / Save translated words and phrases to your wordbook",
+  "main": "main.js",
+  "events": ["translation", "action"],
+  "capabilities": ["blocks", "store"],
+  "tab": {
+    "title": "生词本",
+    "icon": "book",
+    "collection": "words",
+    "item": { "type": "term", "term": "{{term}}", "gloss": "{{gloss}}", "detail": "{{example}}", "language": "{{language}}" },
+    "searchFields": ["term", "gloss"],
+    "sort": { "field": "updatedAt", "order": "desc" },
+    "itemActions": [{ "type": "delete" }]
+  }
+}

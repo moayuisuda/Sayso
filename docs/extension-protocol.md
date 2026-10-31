@@ -1,0 +1,411 @@
+# Sayso 扩展协议（schemaVersion 3）
+
+## 0. 设计原则
+
+1. **一切皆扩展。** Sayso 只负责把语音、选中文本变成统一的文本输入，交给路由到的命令；处理全部由扩展完成。
+   内置的「语音翻译」「划词翻译」「生词本」与第三方扩展是同一种 JS 扩展，只是随应用发布（源码在 `core/plugins/`），
+   它们使用宿主能力（调用翻译模型、写入前台应用）也只通过 `sayso.*` API，第三方扩展同样可以实现。
+2. **跨平台。** 扩展是 ES 模块，由 Sayso core 内嵌的 QuickJS 运行，不依赖任何平台：同一个扩展在 macOS 与 Windows 上行为一致。
+   录音、读取选区、写入前台应用等平台差异由各平台的适配层处理，扩展看不到。
+3. **界面是声明式的。** 扩展只描述「显示什么」（块）和「能做什么」（操作），由 Sayso 用固定的组件库渲染。扩展不运行界面代码，因此不会抢焦点，外观也保持统一。
+4. **一条渲染路径。** 候选框里的所有内容，包括语音翻译、划词翻译的结果，都是块；扩展页签里的列表项也是块。
+5. **每个事件一个独立环境。** 每个事件新建一个 JS 上下文，调用扩展导出的同名处理函数，处理完即销毁，事件之间不共享内存状态；需要保存的数据写入扩展数据（`sayso.store`）。
+6. **能力显式声明。** 扩展在清单中声明要用的能力，启用时由用户确认；未声明的能力在 API 入口处被拒绝。写入其他应用（`insert`）必须由用户触发：点击按钮，或触发该扩展的命令。
+7. **只增不改。** 新增字段、事件类型、块类型、操作类型都向后兼容，扩展必须忽略不认识的字段；删除字段或改变语义时提升 `schemaVersion`。
+
+## 1. 概念总览
+
+```
+ 入口键 + 路由 ─▶ 输入（语音或选区，统一为 input.text）
+                     │
+Sayso ── 事件（处理函数参数）──▶ 扩展 main.js ── sayso.* ──▶ Sayso
+   │  command（定向）                       sayso.blocks ──▶ 候选框
+   │  action（定向）                        sayso.store  ──▶ 扩展数据
+   │  translation（扩展广播）               sayso.llm / insert / speak / fs
+   │  inserted（Sayso 广播）                sayso.publish ──▶ 广播给其他扩展
+   └── 候选框（各来源的块） ◀──── 渲染 ──── 扩展页签（按模板渲染扩展数据）
+```
+
+| 概念 | 说明 |
+| --- | --- |
+| **来源（source）** | 往候选框提供块的一方。Sayso 自身只有 `sayso.app`（应用状态提示）；每个启用的扩展也是一个来源 |
+| **路由（route）** | 统一入口键（默认右 ⌥）的一种按法，并决定**输入来源**：语音（说一句话）或选区（前台应用中选中的文本） |
+| **命令（command）** | 扩展提供的动作，绑定到路由。同一路由可绑定多个命令，同时触发，收到同一份输入 |
+| **块（block）** | 候选框与页签里的最小界面单元，类型来自固定组件库 |
+| **操作（action）** | 块上的可点击行为：朗读、复制、打开链接、写入、回调扩展、删除记录 |
+| **数据（store）** | 每个扩展独有的记录集合，由 Sayso 托管存储 |
+| **页签（tab）** | 扩展在设置窗口中的专属页面，按清单中的模板渲染其数据 |
+
+## 2. 清单 `extension.json`
+
+外部扩展安装在 Sayso 数据目录的 `Extensions/<目录>/` 下（macOS 为 `~/Library/Application Support/Sayso/Extensions/`），
+目录内至少有 `extension.json` 与入口脚本，通常通过 `.sayso` 扩展包安装（见第 11 节）。完整示例见 [`examples/extensions`](../examples/extensions)。
+
+```json
+{
+  "schemaVersion": 3,
+  "id": "com.example.favorites",
+  "name": "收藏夹",
+  "description": "翻译出单词时显示收藏按钮，收藏的词显示在「收藏」页签",
+  "main": "main.js",
+  "timeoutSeconds": 5,
+  "events": ["translation", "action"],
+  "capabilities": ["blocks", "store"],
+  "tab": {
+    "title": "收藏",
+    "icon": "star",
+    "collection": "favorites",
+    "item": { "type": "term", "term": "{{word}}", "gloss": "{{meaning}}", "detail": "收藏 {{count}} 次", "language": "{{language}}" },
+    "searchFields": ["word", "meaning"],
+    "sort": { "field": "updatedAt", "order": "desc" },
+    "itemActions": [
+      { "type": "open", "label": "词典", "url": "https://dictionary.cambridge.org/search/direct/?q={{word}}" },
+      { "type": "delete" }
+    ]
+  }
+}
+```
+
+| 字段 | 必填 | 说明 |
+| --- | --- | --- |
+| `schemaVersion` | 是 | 协议版本，当前为 `3`；其他版本的扩展在扩展页显示为加载失败 |
+| `id` | 是 | 全局唯一的反向域名标识，也是启停状态与数据目录的键；`sayso.` 前缀保留给内置扩展 |
+| `name` / `description` | 是 / 否 | 扩展管理页显示 |
+| `main` | 订阅事件时必填 | 入口 ES 模块，相对扩展目录 |
+| `timeoutSeconds` | 否 | 单次事件处理的超时，默认 10，取值 1–60；包括等待模型回复的时间 |
+| `events` | 否 | 订阅的事件类型，只会收到其中的事件；只提供识别器的扩展可省略 |
+| `capabilities` | 否 | 声明的能力，见下表 |
+| `tab` | 否 | 扩展页签，需同时声明 `store` 能力 |
+| `commands` | 否 | 扩展提供的命令 `[{ "id", "title" }]`，需同时订阅 `command` |
+| `recognizer` | 否 | 扩展提供的流式语音识别器，见第 10 节；需声明 `audio` 能力 |
+
+| 能力 | 允许 |
+| --- | --- |
+| `blocks` | `sayso.blocks.*`，向候选框添加块 |
+| `store` | `sayso.store.*`，拥有自己的数据集合与页签；页签条目可用 `delete` 操作 |
+| `insert` | 把文字写入前台应用：块上的 `insert` 操作（用户点击后），或处理 `command` 时调用 `sayso.insert` |
+| `llm` | `sayso.llm`，用用户在设置中配置的翻译模型补全，扩展不需要自带 API Key |
+| `publish` | `sayso.publish`，向其他扩展广播 `translation` |
+| `fs` | `sayso.fs.*`，读写扩展目录与用户配置的路径（如 Obsidian 库） |
+| `audio` | 作为语音识别器，在录音时接收麦克风音频 |
+
+外部扩展默认关闭。在「设置 → 扩展」启用时，Sayso 列出它订阅的事件与声明的能力，由用户确认。
+
+### 命令与路由
+
+```json
+"events": ["command"],
+"commands": [{ "id": "explain", "title": "讲解语法" }]
+```
+
+命令只声明 `id`（扩展内唯一）与 `title`（显示在扩展页、菜单栏与录音中的候选框）。**输入来源不属于命令，而属于路由**：
+所有命令都从一个统一入口键（「设置 → 通用 → 开始输入」，默认右 ⌥）触发，用户在「设置 → 扩展」中为命令设路由，并为路由选择输入来源：
+
+| 路由 | 按法 | 默认输入 | 例子 |
+| --- | --- | --- | --- |
+| 直接 | 只按入口键 | 语音 | 语音翻译：按住右 ⌥ 说话 |
+| 路由键 | 按住入口键期间按一下某个键 | 新路由默认语音，可改为选区 | 划词翻译（默认 T，选区）：选中文字，按住右 ⌥ 按 T |
+
+- 扩展拿到的都是 `input.text`，不需要区分来源；同一个命令绑到语音路由就处理说的话，绑到选区路由就处理选中的文字。
+- **同一路由可以绑定多个命令**，同时触发。例如把「待办 · 添加待办」也设为「直接」：说一句话，既翻译写入，也记成待办。
+- 按住入口键即开始为「直接」路由录音。松开前按了语音路由的路由键，就改为交给该路由的命令（可以按多个）；
+  按了选区路由的路由键，就放弃录音，立即读取选区交给它。
+- 没有路由的命令不会被触发；扩展关闭时其路由失效。
+
+触发后 Sayso 准备输入（录音并识别，或读取选区），打开候选框（先显示识别原文或选中文本），
+再把 `command` 事件分别发给每个命令所属的扩展，它们并发执行；扩展失败或超时时，候选框会显示失败原因。
+
+## 3. 事件
+
+扩展的入口模块按事件类型导出同名处理函数，可以是 `async` 函数。没有导出对应函数时，事件被忽略并记一条警告：
+
+```js
+export async function command(event) { … }
+export function action(event) { … }
+export function translation(event) { … }
+export function inserted(event) { … }
+```
+
+处理函数收到的事件对象中，公共字段与事件字段平铺在同一层：
+
+```json
+{
+  "schemaVersion": 3,
+  "type": "command",
+  "id": "7C1E…",
+  "timestamp": "2026-10-30T03:12:45Z",
+  "languages": { "target": "en", "native": "zh" },
+  "surface": { "id": "0C2B…", "blocks": [ … ] },
+  "command": { "id": "explain" },
+  "input": { "text": "I wish I had known it earlier.", "via": "selection" },
+  "source": { "id": "com.apple.Safari", "name": "Safari" }
+}
+```
+
+| 公共字段 | 说明 |
+| --- | --- |
+| `type` | 事件类型 |
+| `id` | 事件唯一标识，可用于去重或作为记录 key |
+| `timestamp` | ISO-8601（UTC，精确到秒） |
+| `languages` | 目标语言 `target`（正在学的）与本地语言 `native`，BCP-47 代码：`en` `zh` `ja` `ko` `fr` `de` `es` `ru` |
+| `surface` | 本次候选框。`blocks` 为此刻框中已有的块（id 带「来源 id/」前缀），扩展可读取并加以利用。来自页签的操作事件没有该字段 |
+
+应用信息（`source`、`destination`）为 `{ "id", "name" }`，`id` 是平台的应用标识（macOS 为 Bundle ID），没有前台应用时为 `null`。
+
+### 3.1 `command`：用户触发了该扩展的命令（只发给命令所属扩展）
+
+- `command.id`：被触发的命令。
+- `input.text`：输入文本，已去除首尾空白，非空。语音输入为识别原文，可能夹杂本地语言；`input.via` 为 `speech` 或 `selection`，一般不需要关心。
+- `source`：触发时的前台应用。同一路由上的每个命令各收到一条，输入相同。
+
+### 3.2 `action`：用户点了该扩展块上的 `invoke` 操作（只发给块所属扩展）
+
+```json
+"action": { "blockId": "favorite", "payload": { "word": "serendipity" }, "origin": "candidate" }
+```
+
+- `blockId` 与扩展输出时一致（不带前缀）。
+- `origin` 为 `candidate`（候选框）或 `tab`（扩展页签）；来自页签时附带 `record`，即被点击条目对应的数据记录，且没有 `surface`。
+- 来自候选框时，扩展输出的块继续显示在同一个候选框中，可用相同 id 覆盖原块（例如把「收藏」卡片替换为「已收藏」）。
+
+### 3.3 `translation`：某个扩展产出了翻译词对（由扩展广播）
+
+```json
+"input": { "text": "I have a 苹果.", "via": "speech" },
+"pairs": [{ "target": "an apple", "native": "a 苹果" }],
+"context": "I have an apple.",
+"source": { "id": "com.apple.Notes", "name": "Notes" }
+```
+
+- `pairs`：「目标语言 · 本地语言」词对，与输入来源无关。语音翻译为每个翻译段一对，划词翻译为整段一对。
+- `context`：词对所在的目标语言整句（语音翻译写入的句子）；划词没有上下文时为 `null`。
+- 生词本、收藏夹等扩展据此记录，不需要关心翻译由谁、从哪种输入产生。
+
+### 3.4 `inserted`：文字已写入前台应用（由 Sayso 广播）
+
+任一扩展通过 `sayso.insert` 或块上的 `insert` 操作写入成功后，Sayso 广播给订阅了它的其他扩展：
+
+```json
+"text": "I have an apple.",
+"destination": { "id": "com.apple.Notes", "name": "Notes" },
+"delivery": "inserted",
+"by": "sayso.dictation"
+```
+
+- `delivery` 为 `inserted`（已写入输入框）或 `copiedToClipboard`（没有可写入的位置，只放入剪贴板）。
+- `by` 为发出写入的扩展。写入者自己不会收到。
+
+## 4. `sayso` API
+
+Sayso 在每个扩展的上下文中注入全局对象 `sayso`。块、数据、朗读、广播是**指令**，调用即生效、没有返回值；
+模型、写入、读取数据、文件是**请求**（`sayso.store.list`、`sayso.llm`、`sayso.insert` 返回 Promise）。
+指令出错（内容无法识别、未声明能力）不会中断扩展，只被忽略并记为警告，显示在扩展管理页的最近一次执行状态中；请求出错（未声明能力、未配置模型、模型调用失败等）抛出异常。
+
+| API | 能力 | 说明 |
+| --- | --- | --- |
+| `sayso.languages` | — | `{ target: { code, name }, native: { code, name } }`，`name` 为英文名，便于写进提示词 |
+| `sayso.blocks.upsert(block)` | `blocks` | 在本次候选框中新增块，或按 `id` 更新本扩展已有的块 |
+| `sayso.blocks.remove(id)` | `blocks` | 删除本扩展的一个块 |
+| `sayso.store.put(collection, key, record)` | `store` | 整条写入（覆盖扩展字段） |
+| `sayso.store.patch(collection, key, { set, increment })` | `store` | 局部更新，记录不存在时创建；`increment` 对数字字段做加法，例如 `{ count: 1 }` |
+| `sayso.store.delete(collection, key)` | `store` | 删除一条记录 |
+| `await sayso.store.list(collection)` | `store` | 读取集合中的全部记录（含本次已执行的写入） |
+| `sayso.speak(text, language)` | — | 自动朗读；用户关闭了「自动朗读」时不发声 |
+| `await sayso.llm(system, user)` | `llm` | 用用户配置的模型与思考强度补全，返回模型输出的文本；未配置模型或调用失败时抛出异常 |
+| `await sayso.insert(text)` | `insert` | 写入触发命令时的前台应用，返回 `"inserted"` 或 `"copiedToClipboard"`；只能在处理 `command` 时使用 |
+| `sayso.publish({ type: "translation", pairs, context })` | `publish` | 广播 `translation`，见下文 |
+| `sayso.text.mayContainNative(text)` | — | 文本是否可能夹杂本地语言；纯目标语言的文本可以跳过模型调用 |
+| `sayso.fs.readText(path)` / `writeText(path, text)` / `appendText(path, text)` / `exists(path)` / `mkdir(path)` | `fs` | 同步读写 UTF-8 文本文件；相对路径相对扩展目录，`~/` 展开为用户主目录；`mkdir` 会创建中间目录 |
+| `console.log(…)` 等 | — | 输出的末尾 4KB 显示在扩展管理页的「最近一次运行」中 |
+
+- 块 id 只在本扩展内唯一，Sayso 按来源分组，不同扩展之间不会冲突。
+- 集合名只允许字母、数字、`_`、`-`。记录的 `key`、`createdAt`、`updatedAt` 由 Sayso 维护，扩展写入同名字段会被忽略。
+- 数据写入由 Sayso 串行、原子落盘，多个事件并发处理时不会写坏数据。
+
+### 广播
+
+`sayso.publish` 让一个扩展把自己的结果告诉其他扩展。例如「划词翻译」完成后广播 `translation`，「生词本」「收藏夹」据此列出词条：
+
+```js
+sayso.publish({ type: "translation", pairs: [{ target: "serendipity", native: "意外发现" }], context: null });
+```
+
+- 只能广播 `translation`；`command`、`action` 是定向事件，`inserted` 由 Sayso 发出，都不能广播。
+- Sayso 补全事件的 `id`、`timestamp`、`languages`、`surface`，并从触发的命令补全 `input` 与 `source`，
+  发给除广播者以外订阅了该事件的已启用扩展，它们输出的块显示在同一个候选框中。
+- 只能在处理 `command` 时广播：处理 `action` 与广播事件时不能再广播，避免循环。
+
+### 运行环境
+
+- 入口与它导入的模块都是 ES 模块，只能用相对路径（`./`、`../`）导入扩展目录内的文件；没有 Node.js、浏览器 API 与网络访问。
+- 每个事件新建上下文，模块顶层代码每次都会重新执行；内存上限 64MB。
+- 超过 `timeoutSeconds` 时处理被中断（包括同步死循环），记为超时。处理函数抛出的异常记为失败，原因显示在候选框与扩展管理页。
+
+### 数据文件格式
+
+数据位于 Sayso 数据目录的 `ExtensionData/<扩展 id>/<collection>.json`，为记录数组，每条记录是扁平对象：
+
+```json
+[
+  { "key": "en|serendipity", "createdAt": "2026-10-30T03:12:50Z", "updatedAt": "2026-10-30T03:12:50Z",
+    "word": "serendipity", "meaning": "意外发现", "language": "en", "count": 1 }
+]
+```
+
+## 5. 块（组件库）
+
+所有块共有字段：`id`（必填）、`type`（必填）、`actions`（可选，操作数组）。
+
+| `type` | 字段 | 渲染 |
+| --- | --- | --- |
+| `text` | `runs: [{text, style?, action?}]`，`role?: primary \| secondary` | 一段可换行的富文本。`style` 可取 `normal`、`highlight`（荧光高亮）、`muted`；`action` 引用本块 `actions` 中某个操作的 `id`，使该片段可点击 |
+| `term` | `term`，`gloss?`，`language`，`detail?` | 词条：目标语言词句 · 释义，点击即朗读；`detail` 为一行小字（音标、词性、次数等） |
+| `card` | `title`，`subtitle?`，`body?` | 标题、副标题和多行正文 |
+| `status` | `message`，`icon?`（SF Symbol 名称），`tone?: info \| success \| warning \| error` | 一行状态提示 |
+
+未被文本片段引用的操作显示为块下方的按钮。可选字符串为空时不显示（便于模板引用缺失字段）。
+
+内置扩展「语音翻译」产生的块示例（即其他扩展收到的事件中 `surface.blocks` 的内容）：
+
+```json
+[
+  { "id": "sayso.dictation/text", "type": "text", "role": "primary",
+    "runs": [ { "text": "I have " }, { "text": "an apple", "style": "highlight", "action": "speak-0" }, { "text": "." } ],
+    "actions": [ { "id": "speak-0", "type": "speak", "text": "an apple", "language": "en" } ] },
+]
+```
+
+划词翻译扩展产生 `sayso.selection/translation`（译文）、`sayso.selection/original`（原文）两个 `text` 块。词条（`term` 块）由生词本扩展列出。
+
+## 6. 操作
+
+| `type` | 字段 | 能力 | 行为 |
+| --- | --- | --- | --- |
+| `speak` | `text`，`language` | — | 用系统语音朗读 |
+| `copy` | `text` | — | 复制到剪贴板 |
+| `open` | `url` | — | 用默认浏览器打开。仅限 `http`/`https`；空格、中文等非法字符会自动编码 |
+| `insert` | `text` | `insert` | 写入前台应用的输入框 |
+| `invoke` | `payload?` | — | 以 `action` 事件回调本扩展 |
+| `delete` | — | `store` | 仅在页签条目上显示，删除对应记录（会二次确认） |
+
+所有操作都可带 `id`（供文本片段引用）与 `label`（按钮文字，缺省时按类型显示）。
+
+## 7. 扩展页签
+
+声明了 `tab` 的已启用扩展在设置窗口中拥有一个独立页签。Sayso 直接读取该扩展的数据集合，按模板渲染，打开页签时**不会**运行扩展：
+
+- `item`：块模板（不含 `id`，条目 id 取记录的 `key`），字符串中用 `{{字段名}}` 引用记录字段，也可引用 `key`、`createdAt`、`updatedAt`。只做文本替换，不支持逻辑；缺失字段替换为空串。
+- `searchFields`：页签搜索框匹配的字段。
+- `sort`：排序字段与方向（`asc` / `desc`）；数字按数值，其余按文本。
+- `itemActions`：每个条目上的操作，同样可用模板。条目上的 `invoke` 以 `origin: "tab"` 回调扩展，并附带该条记录。
+
+## 8. 候选框的组成与显示时长
+
+一次按入口键对应一个候选框：
+
+1. 录音时显示「正在聆听 · 命令名」与实时识别文字。输入准备好后，在扩展输出第一个块之前显示识别原文或选中文本与处理进度。
+2. 扩展的块按到达顺序分组追加；外部扩展的分组带扩展名称，内置扩展不显示名称。同一路由的多个命令输出在同一个候选框里。
+3. 有扩展仍在处理时，候选框保持显示并提示「处理中」（与识别阶段是同一个状态），块到达后立即出现。
+4. 右上角有关闭按钮，随时可手动关闭。内容超过一定高度时可滚动（录音中的实时文字自动跟随最新内容）。鼠标悬停时不会自动隐藏；内容最后一次变化后，按内容停留一段时间再隐藏：语音命令 1.5 秒、选中文本命令 8 秒、错误 3 秒；含高亮文本（如语音翻译的译文）时至少 5 秒；有等待点击的 `invoke` 按钮（如「加入生词本」）时至少 15 秒。
+
+## 9. 内置扩展
+
+内置扩展的源码在 [`core/plugins`](../core/plugins)，编译时嵌入 core，与第三方扩展使用同一套 API，也是编写扩展的参考实现。
+
+### 9.1 语音翻译 `sayso.dictation`
+
+- 提供命令 `translate`（「翻译并输入」），默认路由为「直接」（按住右 ⌥ 说话）；能力为 `blocks`、`publish`、`insert`、`llm`。
+- 用目标语言说话，不会的词用本地语言说：用 `sayso.llm` 翻译成完整的目标语言句子（原文必须按顺序出现在识别结果中，否则视为不可信），用 `sayso.insert` 写入前台应用。
+- 输出 `text` 块（id `text`，译文高亮、点击朗读），必要时附提示块（`clipboard`、`notice`），朗读每个翻译段，最后广播 `translation`（`context` 为写入的整句）。
+- 未配置翻译模型或翻译失败时原样写入识别结果并提示原因，说的话不丢。
+
+### 9.2 划词翻译 `sayso.selection`
+
+- 提供命令 `translate`（「翻译文字」），默认路由键 T、输入为选区（按住右 ⌥ 按 T）；能力为 `blocks`、`publish`、`llm`。
+- 输入为本地语言则译为目标语言，其他语言译为本地语言；输出译文（`translation`）、原文（`original`）两个 `text` 块。
+- 涉及目标语言时朗读目标语言一侧，并广播 `translation`（`context` 为 `null`）；第三种语言（如目标语言为日语时选中英文）只显示译文，不朗读、不广播。
+
+### 9.3 生词本 `sayso.wordbook`
+
+- 订阅 `translation`、`action`，能力为 `blocks`、`store`，拥有「生词本」页签（集合 `words`）。
+- 不自动记录。把词对中的单词、短语或习语（不超过 6 个词、40 个字符）逐个列为 `term` 块（id 为「语言|小写词条」），每个带「加入生词本」按钮；有多个词条时另有一个 `status` 块带「全部加入生词本」按钮。
+- 按钮是 `invoke` 操作，载荷中带上要加入的词条，扩展本身不保存候选状态。点击后以 `sayso.store.patch` 写入，`increment: { count: 1 }`；有 `context` 时记录为例句，没有时不覆盖已有例句。
+- 已加入的词条用同 id 的 `term` 块替换：去掉按钮，显示「已加入生词本（第 3 次）」。「全部加入」根据事件中的 `surface.blocks` 跳过已单独加入的词条，全部加入后按钮换成「已全部加入生词本」。
+
+## 10. 识别器（实时语音识别）
+
+扩展可以提供一个流式语音识别器，用来接入本地模型或任意识别服务。识别器需要处理连续的音频流，是扩展中唯一以独立进程运行的部分，可以用任何语言编写。启用后，它出现在「设置 → 语音识别」的识别服务列表中；
+选用后，录音期间 Sayso 把音频持续交给它，它回传的文字在候选框中**实时显示**，与内置的云端识别服务一样。
+
+```json
+{
+  "schemaVersion": 3,
+  "id": "com.example.local-asr",
+  "name": "本地识别",
+  "capabilities": ["audio"],
+  "recognizer": {
+    "title": "本地 Zipformer 中英双语",
+    "command": ["./python/bin/python3", "recognize.py"],
+    "finishTimeoutSeconds": 10
+  }
+}
+```
+
+| 字段 | 必填 | 说明 |
+| --- | --- | --- |
+| `title` | 是 | 显示在识别服务列表中的名称 |
+| `command` | 是 | 识别器可执行文件及参数。首项含 `/` 时相对扩展目录解析，否则在 `PATH` 中查找 |
+| `finishTimeoutSeconds` | 否 | 录音结束后等待最终结果的最长时间，默认 30，取值 1–120 |
+
+### 进程约定
+
+每次录音启动一次识别器进程，录音期间一直运行。stdin、stdout 均为每行一条 JSON。
+
+Sayso → 识别器（stdin）：
+
+| 消息 | 说明 |
+| --- | --- |
+| `{"type":"start","schemaVersion":3,"languages":{"target":"en","native":"zh"},"audio":{"encoding":"pcm_s16le","sampleRate":16000,"channels":1}}` | 进程启动后的第一行 |
+| `{"type":"audio","data":"<base64>"}` | 录音期间约每 100ms 一行：16kHz、单声道、16 位小端 PCM |
+| `{"type":"end"}` | 用户松开热键，随后 stdin 关闭（EOF） |
+
+识别器 → Sayso（stdout）：
+
+| 消息 | 说明 |
+| --- | --- |
+| `{"type":"partial","text":"…"}` | 当前完整识别文本（不是增量），候选框随之更新；可随时、多次输出 |
+| `{"type":"final","text":"…"}` | 最终结果；输出后 Sayso 不再读取，进程应退出 |
+| `{"type":"error","message":"…"}` | 识别失败，消息显示在候选框中 |
+
+- 进程未输出 `final` 就退出，或超过 `finishTimeoutSeconds` 仍未给出 `final`，本次识别失败，stderr 末尾内容显示在错误中。
+- 用户取消录音时 Sayso 直接终止进程。
+- 环境变量：`SAYSO_SCHEMA_VERSION`、`SAYSO_EXTENSION_ID`、`SAYSO_MODE=recognizer`；工作目录为扩展目录。
+- 从 Finder / 登录项启动的应用 `PATH` 很短（通常只有 `/usr/bin:/bin:/usr/sbin:/sbin`），依赖 Homebrew 等工具时请在命令中写绝对路径或随扩展打包。
+
+完整示例见 [`examples/extensions/sherpa-zh-en`](../examples/extensions/sherpa-zh-en)：用 sherpa-onnx 中英双语流式模型离线实时识别。
+
+## 11. 扩展包（`.sayso`）
+
+扩展包是扩展文件夹的 zip 归档，用于分享与安装。
+
+- **原样打包、原样安装。** 扩展包包含扩展文件夹中的全部文件：清单、代码，以及运行所需的解释器、依赖、模型。
+  Sayso 安装时只解压，不做任何下载或安装步骤；拿到的是什么，装上的就是什么。
+- **扩展要能整体搬运。** 运行所需的一切都放在扩展文件夹内，命令用相对路径指向它们（如 `./python/bin/python3`）。
+  不要依赖用户电脑上安装的软件，也不要使用写死本机绝对路径的环境（如 Python 虚拟环境）。只用系统自带解释器
+  的识别器在任何 Mac 上都能运行；JS 扩展没有这个问题，在所有平台上都能直接运行。
+- **识别器按平台分别发布。** 识别器自带的解释器、模型运行库区分操作系统与 Apple 芯片 / Intel，由发布者分别打包，例如 `xxx-arm64.sayso`、`xxx-x86_64.sayso`。
+- **用户数据不进扩展包。** 扩展通过 `sayso.store` 保存的数据位于 Sayso 数据目录的 `ExtensionData/<扩展 id>/`，
+  不在扩展文件夹内，导出扩展不会带出用户数据。
+
+| 操作 | 方式 |
+| --- | --- |
+| 导出 | 「设置 → 扩展」选中外部扩展，点「导出…」 |
+| 安装 | 双击 `.sayso` 文件，或在「设置 → 扩展」点「安装扩展…」 |
+| 删除 | 扩展详情页点「删除…」；扩展保存的数据保留 |
+
+安装前，Sayso 显示扩展的名称、说明、大小、订阅的事件、提供的识别器与申请的能力，并提示扩展包含会在本机运行的代码；
+用户确认后，扩展解压到 `Extensions/<扩展 id>/` 并启用。已安装同一 id 的扩展时整体替换，数据保留。
+用户确认即表示信任其中的代码，因此解压时不保留下载带来的隔离标记，否则扩展程序会被系统阻止运行。
+
+JS 扩展只能通过 `sayso.*` 使用宿主能力，能力声明即其边界（`fs` 能力可读写用户的文件）。识别器以用户身份作为普通进程运行，没有系统级沙盒，可访问用户的文件与网络。
+只安装来自可信来源的扩展包。

@@ -1,0 +1,29 @@
+{
+  "schemaVersion": 3,
+  "id": "com.sayso.example.favorites",
+  "name": "收藏夹 / Favorites",
+  "description": "翻译出单词时显示收藏按钮，收藏的词显示在「收藏」页签 / Adds a Favorite button to translated words and lists them in a Favorites tab",
+  "main": "main.js",
+  "timeoutSeconds": 5,
+  "events": ["translation", "action"],
+  "capabilities": ["blocks", "store"],
+  "tab": {
+    "title": "收藏",
+    "icon": "star",
+    "collection": "favorites",
+    "item": {
+      "type": "term",
+      "term": "{{word}}",
+      "gloss": "{{meaning}}",
+      "detail": "收藏 {{count}} 次",
+      "language": "{{language}}"
+    },
+    "searchFields": ["word", "meaning"],
+    "sort": { "field": "updatedAt", "order": "desc" },
+    "itemActions": [
+      { "type": "copy", "text": "{{word}}" },
+      { "type": "open", "label": "词典", "url": "https://dictionary.cambridge.org/search/direct/?q={{word}}" },
+      { "type": "delete" }
+    ]
+  }
+}

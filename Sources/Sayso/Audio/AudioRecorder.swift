@@ -98,13 +98,18 @@ final class AudioRecorder: @unchecked Sendable {
         chunks.forEach { chunkCallback?($0) }
     }
 
-    /// RMS 映射到 0...1（-50dB...0dB）。
+    /// 语音音量区间（实测内置麦克风：环境底噪约 -54...-45dB，正常说话约 -38...-22dB）。
+    /// 人声很少接近 0dB，按满刻度映射会把轻声与大声挤在一起；下限压住底噪，上限对应大声说话。
+    private static let quietDB: Float = -48
+    private static let loudDB: Float = -20
+
+    /// RMS 按语音音量区间映射到 0...1。
     private static func level(of buffer: AVAudioPCMBuffer) -> Float {
         guard let channel = buffer.floatChannelData?[0], buffer.frameLength > 0 else { return 0 }
         let frames = Int(buffer.frameLength)
         var sum: Float = 0
         for index in 0..<frames { sum += channel[index] * channel[index] }
         let db = 20 * log10(max(sqrt(sum / Float(frames)), 1e-7))
-        return max(0, min(1, (db + 50) / 50))
+        return max(0, min(1, (db - quietDB) / (loudDB - quietDB)))
     }
 }

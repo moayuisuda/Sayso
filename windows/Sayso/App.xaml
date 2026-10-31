@@ -30,6 +30,15 @@
       <ResourceDictionary.MergedDictionaries><XamlControlsResources xmlns="using:Microsoft.UI.Xaml.Controls" /></ResourceDictionary.MergedDictionaries>
       <SolidColorBrush x:Key="SaysoAccent" Color="#3F51B5" />
       <SolidColorBrush x:Key="SaysoOnAccent" Color="White" />
+      <!-- 录音时面板边缘流光的色彩，与 macOS Theme.glow 一致：以主题色 Indigo 为主，掺入相邻的紫与蓝。 -->
+      <LinearGradientBrush x:Key="SaysoRecordingGlow">
+        <GradientStop Color="#3F51B5" />
+        <GradientStop Color="#7C4DFF" />
+        <GradientStop Color="#536DFE" />
+        <GradientStop Color="#C5CAE9" />
+        <GradientStop Color="#448AFF" />
+        <GradientStop Color="#8C9EFF" />
+      </LinearGradientBrush>
       <Thickness x:Key="ButtonPadding">12,6,12,6</Thickness>
       <CornerRadius x:Key="ControlCornerRadius">6</CornerRadius>
       <Style TargetType="TextBlock"><Setter Property="FontSize" Value="13" /></Style>

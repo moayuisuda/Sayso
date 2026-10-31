@@ -19,8 +19,8 @@ final class CoreModel {
     private(set) var problems: [CatalogProblem] = []
     /// 每个扩展的数据版本，数据变化时递增，页签据此刷新。
     private(set) var storeRevisions: [String: Int] = [:]
-    /// 录音音量，0...1。音量只用于界面显示，不经过 core。
-    var audioLevel: Float = 0
+    /// 录音音量，只用于界面显示，不经过 core；不参与观察，由录音界面按帧读取。
+    let audioLevel = AudioLevel()
     @ObservationIgnored var onSessionChange: (SessionState) -> Void = { _ in }
 
     @ObservationIgnored private let logger = Logger(subsystem: "com.sayso.app", category: "core")

@@ -149,6 +149,9 @@ internal static class SmokeTests
                 await Task.Delay(100);
                 candidate.ValidateContentSurface();
                 if (current.IsUpdating || platform.AudioLevel != 0) throw new Exception("Recording feedback was not cleared after capture stopped.");
+                // 流光淡出约 0.25 秒后必须停止逐帧刷新。
+                await Task.Delay(400);
+                if (candidate.RecordingGlowAnimating) throw new Exception("The recording glow kept rendering after recording ended.");
             }
             finally
             {

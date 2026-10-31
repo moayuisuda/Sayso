@@ -20,6 +20,13 @@ struct CandidateView: View {
             RoundedRectangle(cornerRadius: Theme.Radius.panel, style: .continuous)
                 .strokeBorder(Theme.panelStroke)
         )
+        .overlay {
+            if isRecording {
+                FlowingBorder(level: model.audioLevel, cornerRadius: Theme.Radius.panel)
+                    .transition(.opacity)
+            }
+        }
+        .animation(.easeOut(duration: 0.25), value: isRecording)
         .fixedSize(horizontal: false, vertical: true)
         .tint(Theme.accent)
         .onHover { model.core.setHovering(hovering: $0) }
@@ -61,13 +68,20 @@ struct CandidateView: View {
     private var status: some View {
         if case .recording(_, let commands) = model.session {
             StatusLabel(([L("正在聆听", "Listening")] + commands).joined(separator: " · ")) {
-                LevelMeter(level: model.audioLevel)
+                Image(systemName: "waveform")
+                    .foregroundStyle(Theme.accentForeground)
+                    .symbolEffect(.variableColor.iterative)
             }
         } else if isWorking {
             StatusLabel(L("处理中", "Working")) { ProgressView().controlSize(.mini) }
         } else if case .presenting = model.session {
             StatusLabel(L("言出", "Sayso")) { IconTile(systemImage: "character.bubble", size: 18) }
         }
+    }
+
+    private var isRecording: Bool {
+        if case .recording = model.session { return true }
+        return false
     }
 
     /// 识别、读取选区与扩展处理对用户是同一个阶段：同一个视图分支显示，阶段切换时状态不跳动。
@@ -149,24 +163,5 @@ private struct SurfaceContent: View {
                     .lineLimit(4)
             }
         }
-    }
-}
-
-/// 随音量跳动的声波条。
-private struct LevelMeter: View {
-    private static let peaks: [CGFloat] = [6, 10, 14, 10, 6]
-
-    let level: Float
-
-    var body: some View {
-        HStack(spacing: 2) {
-            ForEach(Self.peaks.indices, id: \.self) { index in
-                Capsule()
-                    .fill(Theme.accentForeground)
-                    .frame(width: 3, height: 4 + CGFloat(level) * Self.peaks[index])
-            }
-        }
-        .frame(height: 18)
-        .animation(.easeOut(duration: 0.08), value: level)
     }
 }

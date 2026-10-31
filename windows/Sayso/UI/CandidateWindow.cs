@@ -17,7 +17,7 @@ internal sealed class CandidateWindow : Window
     private readonly CoreClient core;
     private readonly Func<string, string, string> localize;
     private readonly Action openSettings;
-    private readonly Func<float> readAudioLevel;
+    private readonly RecordingGlow recordingGlow;
     private readonly CandidateDismissMonitor dismissMonitor;
     private string lastKind = "idle";
     private bool recognizingSpeech;
@@ -33,16 +33,18 @@ internal sealed class CandidateWindow : Window
     };
     private bool visible, compact, placing, inspectionPinned;
     internal UIElement? RenderedContent => root.Child;
+    internal bool RecordingGlowAnimating => recordingGlow.IsAnimating;
 
     public CandidateWindow(CoreClient core, Func<string, string, string> localize, Action openSettings, Func<float> readAudioLevel)
     {
         this.core = core;
         this.localize = localize;
         this.openSettings = openSettings;
-        this.readAudioLevel = readAudioLevel;
         Title = "Sayso · 候选框";
         SystemBackdrop = new DesktopAcrylicBackdrop();
-        Content = root;
+        // 流光叠在内容之上且独立于内容：会话内容随识别文本重建时，流光持续流动。
+        recordingGlow = new RecordingGlow(readAudioLevel, root.CornerRadius.TopLeft);
+        Content = new Grid { Children = { root, recordingGlow } };
         var presenter = OverlappedPresenter.Create();
         presenter.IsAlwaysOnTop = true;
         presenter.IsResizable = false;
@@ -87,6 +89,8 @@ internal sealed class CandidateWindow : Window
         lastKind = kind;
         recordingFeedback?.Stop();
         recordingFeedback = null;
+        if (kind == "recording") recordingGlow.Start();
+        else recordingGlow.Stop();
         if (kind == "idle") { visible = false; root.Child = null; AppWindow.Hide(); return; }
         var actions = Controls.Horizontal(
             Controls.IconButton("\uE713", localize("打开设置", "Open settings"), openSettings),
@@ -151,7 +155,7 @@ internal sealed class CandidateWindow : Window
             var title = kind == "recording" ? localize("正在聆听", "Listening")
                 : recognizingSpeech ? localize("正在识别", "Recognizing") : working ? localize("处理中", "Working") : "Sayso";
             UIElement identity;
-            if (kind == "recording") identity = recordingFeedback = new RecordingFeedback(title, readAudioLevel, recordingStartedAt);
+            if (kind == "recording") identity = recordingFeedback = new RecordingFeedback(title, recordingStartedAt);
             else
             {
                 UIElement icon = working ? new ProgressRing { Width = 12, Height = 12, IsActive = true, Foreground = Controls.Brush("SaysoAccentText") }
@@ -222,6 +226,7 @@ internal sealed class CandidateWindow : Window
         ValidateContentSurface();
         if (recordingFeedback is not { IsUpdating: true } feedback || feedback.Elapsed < minimumElapsed)
             throw new InvalidOperationException("Recording feedback stopped updating or its clock was reset by a transcript update.");
+        if (!recordingGlow.IsAnimating) throw new InvalidOperationException("The recording glow is not following the microphone level.");
         if (!AppWindow.IsVisible || NativeMethods.GetForegroundWindow() == WinRT.Interop.WindowNative.GetWindowHandle(this))
             throw new InvalidOperationException("Recording feedback must remain visible without taking input focus.");
         return feedback;

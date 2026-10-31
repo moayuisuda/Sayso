@@ -28,6 +28,16 @@ enum Theme {
     static let hairline = Color.primary.opacity(0.1)
     /// 悬浮面板外描边：在任意桌面背景上勾出面板边缘。
     static let panelStroke = Color.white.opacity(0.14)
+    /// 录音时面板边缘流光的色彩：以主题色 Indigo 为主，掺入相邻的紫与蓝让光团流动时有色相变化，
+    /// 浅色高光在深色模式下发亮。
+    static let glow: [Color] = [
+        accent,
+        Color(rgb: 0x7C4DFF),
+        Color(rgb: 0x536DFE),
+        Color(rgb: 0xC5CAE9),
+        Color(rgb: 0x448AFF),
+        Color(rgb: 0x8C9EFF),
+    ]
 
     enum Radius {
         static let panel: CGFloat = 12

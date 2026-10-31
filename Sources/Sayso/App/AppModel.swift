@@ -42,7 +42,8 @@ final class AppModel {
         let model = model
         let core = model.core
         platform.onAudio = { core.pushAudio(pcm: $0) }
-        platform.onLevel = { level in DispatchQueue.main.async { model.audioLevel = level } }
+        let audioLevel = model.audioLevel
+        platform.onLevel = { audioLevel.set($0) }
         model.onSessionChange = { [panel] in panel.update(for: $0) }
         hotkeys.isSessionActive = { core.isSessionActive() }
         hotkeys.candidateSurface = { [panel] timestamp in panel.dismissibleSurface(forEventAt: timestamp) }

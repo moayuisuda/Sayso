@@ -4,16 +4,22 @@ use super::{Block, Json, LanguagePair, SCHEMA_VERSION};
 use crate::store::StoreRecord;
 
 /// 扩展事件类型。新增事件只增加 case，已发布的名称不可修改。
+///
+/// 扩展分两种：触发式扩展（内置的语音翻译、划词翻译）由路由触发，接收 `command`，
+/// 并在处理的各个环节广播 hook；事件式扩展（生词本与全部第三方扩展）只订阅 hook，
+/// 可以往候选框添加块和按钮，用户点击后以 `action` 回调。
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, Serialize, Deserialize, uniffi::Enum)]
 #[serde(rename_all = "lowercase")]
 pub enum EventType {
-    /// 用户触发了该扩展的命令（定向）。
+    /// 用户触发了该扩展的命令（定向，只发给触发式扩展）。
     Command,
     /// 用户点击了该扩展块上的 invoke 操作（定向）。
     Action,
-    /// 某个扩展产出了翻译词对（由扩展广播）。
-    Translation,
-    /// 某个扩展把文字写入了前台应用（由 Sayso 广播）。
+    /// hook：输入已准备好，交给触发式扩展处理（由 Sayso 广播）。
+    Input,
+    /// hook：触发式扩展翻译完毕（由触发式扩展广播）。
+    Translated,
+    /// hook：文字已写入前台应用（由 Sayso 广播）。
     Inserted,
 }
 
@@ -22,7 +28,8 @@ impl EventType {
         match self {
             Self::Command => "command",
             Self::Action => "action",
-            Self::Translation => "translation",
+            Self::Input => "input",
+            Self::Translated => "translated",
             Self::Inserted => "inserted",
         }
     }
@@ -103,7 +110,12 @@ pub enum Payload {
     Action {
         action: ActionInvocation,
     },
-    Translation(Translation),
+    Input {
+        input: Input,
+        /// 触发时的前台应用。
+        source: Option<AppInfo>,
+    },
+    Translated(Translation),
     Inserted {
         text: String,
         destination: Option<AppInfo>,
@@ -138,10 +150,13 @@ pub enum ActionOrigin {
     Tab,
 }
 
-/// 翻译结果：一组「目标语言 · 本地语言」词对，与输入来源无关。
+/// 翻译结果：译文与其中「目标语言 · 本地语言」词对，与输入来源无关。
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub struct Translation {
     pub input: Input,
+    /// 译文：语音翻译为写入的整句，划词翻译为译文。
+    pub output: String,
+    /// 没有需要翻译的片段（如纯目标语言输入）或译为第三种语言时为空。
     pub pairs: Vec<TranslationPair>,
     /// 词对所在的目标语言整句（语音输入写入的句子）；划词没有上下文时为 null。
     #[serde(default)]
@@ -173,7 +188,8 @@ impl Event {
         match self.payload {
             Payload::Command { .. } => EventType::Command,
             Payload::Action { .. } => EventType::Action,
-            Payload::Translation(_) => EventType::Translation,
+            Payload::Input { .. } => EventType::Input,
+            Payload::Translated(_) => EventType::Translated,
             Payload::Inserted { .. } => EventType::Inserted,
         }
     }

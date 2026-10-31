@@ -1,5 +1,5 @@
 {
-  "schemaVersion": 3,
+  "schemaVersion": 4,
   "id": "sayso.selection",
   "name": "划词翻译 / Translate Selection",
   "description": "翻译输入的文字：选中本地语言译为目标语言，反之亦然 / Translate the input text between your native and target language",

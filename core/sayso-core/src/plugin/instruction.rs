@@ -18,8 +18,9 @@ pub enum Instruction {
         text: String,
         language: Language,
     },
-    /// 广播 `translation` 事件；输入与来源由宿主从触发的命令补全。
-    PublishTranslation {
+    /// 广播 `translated` hook；输入与来源由宿主从触发的命令补全。
+    PublishTranslated {
+        output: String,
         pairs: Vec<TranslationPair>,
         context: Option<String>,
     },
@@ -52,11 +53,12 @@ enum Wire {
     Publish { event: PublishedEvent },
 }
 
-/// 只能广播 `translation`；定向事件与 Sayso 自己发出的 `inserted` 不能由插件广播。
+/// 只能广播 `translated`；定向事件与 Sayso 自己发出的 `input`、`inserted` 不能由插件广播。
 #[derive(Deserialize)]
 #[serde(tag = "type", rename_all = "lowercase")]
 enum PublishedEvent {
-    Translation {
+    Translated {
+        output: String,
         pairs: Vec<TranslationPair>,
         #[serde(default)]
         context: Option<String>,
@@ -76,8 +78,8 @@ impl Instruction {
             }
             Wire::StoreDelete { collection, key } => Self::Store(StoreWrite::Delete { collection, key }),
             Wire::Speak { text, language } => Self::Speak { text, language },
-            Wire::Publish { event: PublishedEvent::Translation { pairs, context } } => {
-                Self::PublishTranslation { pairs, context }
+            Wire::Publish { event: PublishedEvent::Translated { output, pairs, context } } => {
+                Self::PublishTranslated { output, pairs, context }
             }
         })
     }
@@ -89,7 +91,7 @@ impl Instruction {
             Self::RemoveBlock(_) => vec![Capability::Blocks],
             Self::Store(_) => vec![Capability::Store],
             Self::Speak { .. } => vec![],
-            Self::PublishTranslation { .. } => vec![Capability::Publish],
+            Self::PublishTranslated { .. } => vec![Capability::Publish],
         }
     }
 }
@@ -99,13 +101,14 @@ mod tests {
     use super::*;
 
     #[test]
-    fn publish_accepts_translation_only() {
+    fn publish_accepts_translated_only() {
         let publish = Instruction::parse(
-            r#"{"op":"publish","event":{"type":"translation","pairs":[{"target":"an apple","native":"一个苹果"}]}}"#,
+            r#"{"op":"publish","event":{"type":"translated","output":"I have an apple.","pairs":[{"target":"an apple","native":"一个苹果"}]}}"#,
         )
         .unwrap();
         assert_eq!(publish.required_capabilities(), vec![Capability::Publish]);
         assert!(Instruction::parse(r#"{"op":"publish","event":{"type":"command","command":{"id":"x"}}}"#).is_err());
         assert!(Instruction::parse(r#"{"op":"publish","event":{"type":"inserted","text":"x"}}"#).is_err());
+        assert!(Instruction::parse(r#"{"op":"publish","event":{"type":"input","input":{"text":"x","via":"speech"}}}"#).is_err());
     }
 }

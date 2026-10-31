@@ -29,7 +29,7 @@
 - **纠正识别误写**：识别服务把目标语言的发音误写成母语文字时，结合读音和上下文还原；纠错与翻译在同一次请求中完成。
 - **纯外语不经过大模型**：两种语言书写系统不同（如英语与中文）时，纯目标语言的句子在本地判定后直接写入，不增加延迟。
 - **8 种语言任意组合**：英、中、日、韩、法、德、西、俄，共 56 种语言对。
-- **可扩展**：内置功能本身就是 JavaScript 扩展，同一份扩展在 macOS 与 Windows 上运行。
+- **可扩展**：内置功能本身就是 JavaScript 扩展，第三方扩展订阅翻译过程中的事件，往候选框里加按钮；同一份扩展在 macOS 与 Windows 上运行。
 
 ## 使用
 
@@ -92,16 +92,15 @@ flowchart LR
 
 ## 扩展
 
-扩展是一个导出事件处理函数的 `main.js`，拿到的输入是统一的文本：可以来自一段语音，也可以来自选中的文字。每个命令可以绑定一个路由键，例如为待办绑定 <kbd>D</kbd> 后，按住入口键说话、松开前按 <kbd>D</kbd>，这句话只会记为待办，不会写入。
+扩展分两种。**触发式扩展**只有内置的语音翻译与划词翻译，由快捷键触发，并在输入就绪（`input`）、翻译完毕（`translated`）、写入完成（`inserted`）等环节广播 hook。**事件式扩展**订阅这些 hook，往候选框里加内容和按钮，用户点击后再回调扩展处理。内置的生词本和所有第三方扩展都属于这一种。
 
-扩展需声明所用能力（`blocks` / `store` / `insert` / `llm` / `publish` / `fs`），第三方扩展启用前由用户确认。
+扩展需声明所用能力（`blocks` / `store` / `insert` / `llm` / `fs`），第三方扩展启用前由用户确认。
 
 | 示例 | 作用 |
 | --- | --- |
-| [`favorites`](examples/extensions/favorites) | 收藏翻译出的单词，单独页签管理 |
-| [`explain`](examples/extensions/explain) | 用已配置的模型讲解一句外语的语法 |
-| [`todo`](examples/extensions/todo) | 把说的话或选中的文字记为待办 |
-| [`obsidian`](examples/extensions/obsidian) | 把写入的内容追加到 Obsidian 当天的笔记 |
+| [`favorites`](examples/extensions/favorites) | 为翻译出的单词显示收藏按钮，单独页签管理 |
+| [`explain`](examples/extensions/explain) | 翻译完成后显示「讲解语法」按钮，用已配置的模型讲解这句外语 |
+| [`obsidian`](examples/extensions/obsidian) | 翻译完成后显示「记到 Obsidian」按钮，把整句与译文词条写成卡片，追加到当天的笔记 |
 
 将扩展文件夹放入扩展目录（macOS：`~/Library/Application Support/Sayso/Extensions/`，Windows：`%LOCALAPPDATA%\Sayso\Extensions\`），在「设置 → 扩展」中重新加载并启用。扩展也可导出为 `.sayso` 文件，双击即可安装。协议与 API 见 [扩展协议](docs/extension-protocol.md)。
 

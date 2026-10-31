@@ -1,10 +1,10 @@
 {
-  "schemaVersion": 3,
+  "schemaVersion": 4,
   "id": "com.sayso.example.obsidian",
   "name": "Obsidian 记录 / Obsidian Log",
-  "description": "把每次写入的文字追加到 Obsidian 当天的笔记 / Appends everything Sayso types to today's note in your Obsidian vault",
+  "description": "翻译完成后显示「记到 Obsidian」按钮，点击后把整句与译文词条写成卡片，追加到当天的笔记 / Adds a Save to Obsidian button after each translation that appends the sentence and its translated words to today's note as a card",
   "main": "main.js",
   "timeoutSeconds": 5,
-  "events": ["inserted"],
+  "events": ["translated", "action"],
   "capabilities": ["blocks", "fs"]
 }

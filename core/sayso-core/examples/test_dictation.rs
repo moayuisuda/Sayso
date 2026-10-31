@@ -92,15 +92,16 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         let started = std::time::Instant::now();
         let result = run(plugin, &event, host.clone()).await;
         let published = host.instructions.lock().unwrap().iter().find_map(|instruction| match instruction {
-            Instruction::PublishTranslation { pairs, context } => Some((pairs.clone(), context.clone())),
+            Instruction::PublishTranslated { output, pairs, context } => Some((output.clone(), pairs.clone(), context.clone())),
             _ => None,
         });
-        if let Some((pairs, context)) = published {
+        if let Some((output, pairs, context)) = published {
             let translation = Event::new(
                 case.languages,
                 None,
-                Payload::Translation(Translation {
+                Payload::Translated(Translation {
                     input: Input { text: case.transcript.clone(), via: InputSource::Speech },
+                    output,
                     pairs,
                     context,
                     source: None,

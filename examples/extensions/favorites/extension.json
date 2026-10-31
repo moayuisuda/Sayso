@@ -1,11 +1,11 @@
 {
-  "schemaVersion": 3,
+  "schemaVersion": 4,
   "id": "com.sayso.example.favorites",
   "name": "收藏夹 / Favorites",
   "description": "翻译出单词时显示收藏按钮，收藏的词显示在「收藏」页签 / Adds a Favorite button to translated words and lists them in a Favorites tab",
   "main": "main.js",
   "timeoutSeconds": 5,
-  "events": ["translation", "action"],
+  "events": ["translated", "action"],
   "capabilities": ["blocks", "store"],
   "tab": {
     "title": "收藏",

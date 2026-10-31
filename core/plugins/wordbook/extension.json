@@ -1,10 +1,10 @@
 {
-  "schemaVersion": 3,
+  "schemaVersion": 4,
   "id": "sayso.wordbook",
   "name": "生词本 / Wordbook",
   "description": "把翻译出的单词、短语加入生词本 / Save translated words and phrases to your wordbook",
   "main": "main.js",
-  "events": ["translation", "action"],
+  "events": ["translated", "action"],
   "capabilities": ["blocks", "store"],
   "tab": {
     "title": "生词本",

@@ -1,36 +1,41 @@
-# Sayso 扩展协议（schemaVersion 3）
+# Sayso 扩展协议（schemaVersion 4）
 
 ## 0. 设计原则
 
 1. **一切皆扩展。** Sayso 只负责把语音、选中文本变成统一的文本输入，交给路由到的命令；处理全部由扩展完成。
    内置的「语音翻译」「划词翻译」「生词本」与第三方扩展是同一种 JS 扩展，只是随应用发布（源码在 `core/plugins/`），
-   它们使用宿主能力（调用翻译模型、写入前台应用）也只通过 `sayso.*` API，第三方扩展同样可以实现。
-2. **跨平台。** 扩展是 ES 模块，由 Sayso core 内嵌的 QuickJS 运行，不依赖任何平台：同一个扩展在 macOS 与 Windows 上行为一致。
+   它们使用宿主能力（调用翻译模型、写入前台应用）也只通过 `sayso.*` API。
+2. **触发式与事件式。** 扩展分两种：
+   - **触发式扩展**只有内置的「语音翻译」「划词翻译」。它们提供命令，由入口键与路由触发，并在处理的各个环节广播 **hook**，带上该环节的数据。
+   - **事件式扩展**包括「生词本」与全部第三方扩展。它们订阅 hook，往候选框添加内容与按钮；用户点击按钮后，以 `action` 事件回调扩展，再由扩展完成自己的处理（记生词、写笔记、讲解语法……）。
+   第三方扩展不能声明命令、订阅 `command` 或广播事件，因此不能绑定路由键。
+3. **跨平台。** 扩展是 ES 模块，由 Sayso core 内嵌的 QuickJS 运行，不依赖任何平台：同一个扩展在 macOS 与 Windows 上行为一致。
    录音、读取选区、写入前台应用等平台差异由各平台的适配层处理，扩展看不到。
-3. **界面是声明式的。** 扩展只描述「显示什么」（块）和「能做什么」（操作），由 Sayso 用固定的组件库渲染。扩展不运行界面代码，因此不会抢焦点，外观也保持统一。
-4. **一条渲染路径。** 候选框里的所有内容，包括语音翻译、划词翻译的结果，都是块；扩展页签里的列表项也是块。
-5. **每个事件一个独立环境。** 每个事件新建一个 JS 上下文，调用扩展导出的同名处理函数，处理完即销毁，事件之间不共享内存状态；需要保存的数据写入扩展数据（`sayso.store`）。
-6. **能力显式声明。** 扩展在清单中声明要用的能力，启用时由用户确认；未声明的能力在 API 入口处被拒绝。写入其他应用（`insert`）必须由用户触发：点击按钮，或触发该扩展的命令。
-7. **只增不改。** 新增字段、事件类型、块类型、操作类型都向后兼容，扩展必须忽略不认识的字段；删除字段或改变语义时提升 `schemaVersion`。
+4. **界面是声明式的。** 扩展只描述「显示什么」（块）和「能做什么」（操作），由 Sayso 用固定的组件库渲染。扩展不运行界面代码，因此不会抢焦点，外观也保持统一。
+5. **一条渲染路径。** 候选框里的所有内容，包括语音翻译、划词翻译的结果，都是块；扩展页签里的列表项也是块。
+6. **每个事件一个独立环境。** 每个事件新建一个 JS 上下文，调用扩展导出的同名处理函数，处理完即销毁，事件之间不共享内存状态；需要保存的数据写入扩展数据（`sayso.store`）。
+7. **能力显式声明。** 扩展在清单中声明要用的能力，启用时由用户确认；未声明的能力在 API 入口处被拒绝。写入其他应用（`insert`）必须由用户触发：点击按钮，或触发内置扩展的命令。
+8. **只增不改。** 新增字段、事件类型、块类型、操作类型都向后兼容，扩展必须忽略不认识的字段；删除字段或改变语义时提升 `schemaVersion`。
 
 ## 1. 概念总览
 
 ```
- 入口键 + 路由 ─▶ 输入（语音或选区，统一为 input.text）
-                     │
-Sayso ── 事件（处理函数参数）──▶ 扩展 main.js ── sayso.* ──▶ Sayso
-   │  command（定向）                       sayso.blocks ──▶ 候选框
-   │  action（定向）                        sayso.store  ──▶ 扩展数据
-   │  translation（扩展广播）               sayso.llm / insert / speak / fs
-   │  inserted（Sayso 广播）                sayso.publish ──▶ 广播给其他扩展
-   └── 候选框（各来源的块） ◀──── 渲染 ──── 扩展页签（按模板渲染扩展数据）
+ 入口键 + 路由 ─▶ 输入（语音或选区）─▶ 触发式扩展（语音翻译 / 划词翻译）
+                     │                          │
+                     ▼ hook: input              ▼ hook: translated → inserted
+               ┌──────────── 事件式扩展（生词本、第三方）────────────┐
+               │  订阅 hook ─▶ sayso.blocks 往候选框加内容与按钮       │
+               │  用户点击按钮 ─▶ action ─▶ sayso.store / llm / fs …  │
+               └──────────────────────────────────────────────────────┘
+   候选框（各来源的块） ◀──── 渲染 ──── 扩展页签（按模板渲染扩展数据）
 ```
 
 | 概念 | 说明 |
 | --- | --- |
 | **来源（source）** | 往候选框提供块的一方。Sayso 自身只有 `sayso.app`（应用状态提示）；每个启用的扩展也是一个来源 |
 | **路由（route）** | 统一入口键（默认右 ⌥）的一种按法，并决定**输入来源**：语音（说一句话）或选区（前台应用中选中的文本） |
-| **命令（command）** | 扩展提供的动作，绑定到路由。同一路由可绑定多个命令，同时触发，收到同一份输入 |
+| **命令（command）** | 触发式扩展提供的动作，绑定到路由。同一路由可绑定多个命令，同时触发，收到同一份输入 |
+| **hook** | 触发流程中各环节的广播事件：`input`（输入就绪）、`translated`（翻译完毕）、`inserted`（已写入），事件式扩展订阅它们 |
 | **块（block）** | 候选框与页签里的最小界面单元，类型来自固定组件库 |
 | **操作（action）** | 块上的可点击行为：朗读、复制、打开链接、写入、回调扩展、删除记录 |
 | **数据（store）** | 每个扩展独有的记录集合，由 Sayso 托管存储 |
@@ -43,13 +48,13 @@ Sayso ── 事件（处理函数参数）──▶ 扩展 main.js ── sayso
 
 ```json
 {
-  "schemaVersion": 3,
+  "schemaVersion": 4,
   "id": "com.example.favorites",
   "name": "收藏夹",
   "description": "翻译出单词时显示收藏按钮，收藏的词显示在「收藏」页签",
   "main": "main.js",
   "timeoutSeconds": 5,
-  "events": ["translation", "action"],
+  "events": ["translated", "action"],
   "capabilities": ["blocks", "store"],
   "tab": {
     "title": "收藏",
@@ -68,7 +73,7 @@ Sayso ── 事件（处理函数参数）──▶ 扩展 main.js ── sayso
 
 | 字段 | 必填 | 说明 |
 | --- | --- | --- |
-| `schemaVersion` | 是 | 协议版本，当前为 `3`；其他版本的扩展在扩展页显示为加载失败 |
+| `schemaVersion` | 是 | 协议版本，当前为 `4`；其他版本的扩展在扩展页显示为加载失败 |
 | `id` | 是 | 全局唯一的反向域名标识，也是启停状态与数据目录的键；`sayso.` 前缀保留给内置扩展 |
 | `name` / `description` | 是 / 否 | 扩展管理页显示 |
 | `main` | 是 | 入口 ES 模块，相对扩展目录 |
@@ -76,51 +81,48 @@ Sayso ── 事件（处理函数参数）──▶ 扩展 main.js ── sayso
 | `events` | 是 | 订阅的事件类型，至少一项，只会收到其中的事件 |
 | `capabilities` | 否 | 声明的能力，见下表 |
 | `tab` | 否 | 扩展页签，需同时声明 `store` 能力 |
-| `commands` | 否 | 扩展提供的命令 `[{ "id", "title" }]`，需同时订阅 `command` |
+| `commands` | 否 | 命令 `[{ "id", "title" }]`，需同时订阅 `command`。只有内置的触发式扩展可以声明 |
 
 | 能力 | 允许 |
 | --- | --- |
 | `blocks` | `sayso.blocks.*`，向候选框添加块 |
 | `store` | `sayso.store.*`，拥有自己的数据集合与页签；页签条目可用 `delete` 操作 |
-| `insert` | 把文字写入前台应用：块上的 `insert` 操作（用户点击后），或处理 `command` 时调用 `sayso.insert` |
+| `insert` | 把文字写入前台应用：块上的 `insert` 操作（用户点击后），或触发式扩展处理 `command` 时调用 `sayso.insert` |
 | `llm` | `sayso.llm`，用用户在设置中配置的翻译模型补全，扩展不需要自带 API Key |
-| `publish` | `sayso.publish`，向其他扩展广播 `translation` |
+| `publish` | `sayso.publish`，广播 `translated` hook。只有内置的触发式扩展可以申请 |
 | `fs` | `sayso.fs.*`，读写扩展目录与用户配置的路径（如 Obsidian 库） |
 
 外部扩展默认关闭。在「设置 → 扩展」启用时，Sayso 列出它订阅的事件与声明的能力，由用户确认。
 
 ### 命令与路由
 
-```json
-"events": ["command"],
-"commands": [{ "id": "explain", "title": "讲解语法" }]
-```
+命令只属于内置的触发式扩展：「语音翻译 · 翻译并输入」与「划词翻译 · 翻译文字」。第三方扩展的清单中出现 `commands`、
+订阅 `command` 或申请 `publish` 时，扩展无法加载。
 
-命令只声明 `id`（扩展内唯一）与 `title`（显示在扩展页、菜单栏与录音中的候选框）。**输入来源不属于命令，而属于路由**：
-所有命令都从一个统一入口键（「设置 → 通用 → 开始输入」，默认右 ⌥）触发，用户在「设置 → 扩展」中为命令设路由，并为路由选择输入来源：
+所有命令都从一个统一入口键（「设置 → 通用 → 开始输入」，默认右 ⌥）触发。用户在「设置 → 扩展」中为命令设路由，并为路由选择输入来源：
 
 | 路由 | 按法 | 默认输入 | 例子 |
 | --- | --- | --- | --- |
 | 直接 | 只按入口键 | 语音 | 语音翻译：按住右 ⌥ 说话 |
 | 路由键 | 按住入口键期间按一下某个键 | 新路由默认语音，可改为选区 | 划词翻译（默认 T，选区）：选中文字，按住右 ⌥ 按 T |
 
-- 扩展拿到的都是 `input.text`，不需要区分来源；同一个命令绑到语音路由就处理说的话，绑到选区路由就处理选中的文字。
-- **同一路由可以绑定多个命令**，同时触发。例如把「待办 · 添加待办」也设为「直接」：说一句话，既翻译写入，也记成待办。
-- 按住入口键即开始为「直接」路由录音。松开前按了语音路由的路由键，就改为交给该路由的命令（可以按多个）；
+- 命令拿到的都是 `input.text`，不需要区分来源；同一个命令绑到语音路由就处理说的话，绑到选区路由就处理选中的文字。
+- 按住入口键即开始为「直接」路由录音。松开前按了语音路由的路由键，就改为交给该路由的命令；
   按了选区路由的路由键，就放弃录音，立即读取选区交给它。
-- 没有路由的命令不会被触发；扩展关闭时其路由失效。
+- 没有路由的命令不会被触发。
 
 触发后 Sayso 准备输入（录音并识别，或读取选区），打开候选框（先显示识别原文或选中文本），
-再把 `command` 事件分别发给每个命令所属的扩展，它们并发执行；扩展失败或超时时，候选框会显示失败原因。
+广播 `input` hook，再把 `command` 事件发给命令所属的扩展；扩展失败或超时时，候选框会显示失败原因。
 
 ## 3. 事件
 
 扩展的入口模块按事件类型导出同名处理函数，可以是 `async` 函数。没有导出对应函数时，事件被忽略并记一条警告：
 
 ```js
-export async function command(event) { … }
+export async function command(event) { … }   // 仅内置触发式扩展
 export function action(event) { … }
-export function translation(event) { … }
+export function input(event) { … }
+export function translated(event) { … }
 export function inserted(event) { … }
 ```
 
@@ -128,13 +130,13 @@ export function inserted(event) { … }
 
 ```json
 {
-  "schemaVersion": 3,
+  "schemaVersion": 4,
   "type": "command",
   "id": "7C1E…",
   "timestamp": "2026-10-30T03:12:45Z",
   "languages": { "target": "en", "native": "zh" },
   "surface": { "id": "0C2B…", "blocks": [ … ] },
-  "command": { "id": "explain" },
+  "command": { "id": "translate" },
   "input": { "text": "I wish I had known it earlier.", "via": "selection" },
   "source": { "id": "com.apple.Safari", "name": "Safari" }
 }
@@ -150,11 +152,11 @@ export function inserted(event) { … }
 
 应用信息（`source`、`destination`）为 `{ "id", "name" }`，`id` 是平台的应用标识（macOS 为 Bundle ID），没有前台应用时为 `null`。
 
-### 3.1 `command`：用户触发了该扩展的命令（只发给命令所属扩展）
+### 3.1 `command`：用户触发了命令（只发给命令所属的内置触发式扩展）
 
 - `command.id`：被触发的命令。
-- `input.text`：输入文本，已去除首尾空白，非空。语音输入为识别原文，可能夹杂本地语言；`input.via` 为 `speech` 或 `selection`，一般不需要关心。
-- `source`：触发时的前台应用。同一路由上的每个命令各收到一条，输入相同。
+- `input.text`：输入文本，已去除首尾空白，非空。语音输入为识别原文，可能夹杂本地语言；`input.via` 为 `speech` 或 `selection`。
+- `source`：触发时的前台应用。
 
 ### 3.2 `action`：用户点了该扩展块上的 `invoke` 操作（只发给块所属扩展）
 
@@ -165,23 +167,37 @@ export function inserted(event) { … }
 - `blockId` 与扩展输出时一致（不带前缀）。
 - `origin` 为 `candidate`（候选框）或 `tab`（扩展页签）；来自页签时附带 `record`，即被点击条目对应的数据记录，且没有 `surface`。
 - 来自候选框时，扩展输出的块继续显示在同一个候选框中，可用相同 id 覆盖原块（例如把「收藏」卡片替换为「已收藏」）。
+- 事件式扩展的典型流程：订阅某个 hook，在候选框中放一个带 `invoke` 操作的块，把之后要用的数据放进 `payload`；
+  用户点击后在 `action` 中完成处理。`action` 事件不带 hook 的数据，需要的内容都要放在 `payload` 里。
 
-### 3.3 `translation`：某个扩展产出了翻译词对（由扩展广播）
+### 3.3 `input`：输入已准备好（hook，由 Sayso 广播）
 
 ```json
 "input": { "text": "I have a 苹果.", "via": "speech" },
+"source": { "id": "com.apple.Notes", "name": "Notes" }
+```
+
+识别完成或读取到选区、交给触发式扩展之前广播，与命令并发处理。
+
+### 3.4 `translated`：翻译完毕（hook，由触发式扩展广播）
+
+```json
+"input": { "text": "I have a 苹果.", "via": "speech" },
+"output": "I have an apple.",
 "pairs": [{ "target": "an apple", "native": "a 苹果" }],
 "context": "I have an apple.",
 "source": { "id": "com.apple.Notes", "name": "Notes" }
 ```
 
-- `pairs`：「目标语言 · 本地语言」词对，与输入来源无关。语音翻译为每个翻译段一对，划词翻译为整段一对。
-- `context`：词对所在的目标语言整句（语音翻译写入的句子）；划词没有上下文时为 `null`。
-- 生词本、收藏夹等扩展据此记录，不需要关心翻译由谁、从哪种输入产生。
+- `output`：译文。语音翻译为写入的整句（纯目标语言输入时即原句），划词翻译为译文。
+- `pairs`：「目标语言 · 本地语言」词对，与输入来源无关。语音翻译为每个翻译段一对，划词翻译为整段一对；
+  没有需要翻译的片段，或划词译为第三种语言时为空。
+- `context`：词对所在的目标语言整句（语音翻译写入的句子）；划词翻译为 `null`。
+- 每次触发都会广播。生词本、收藏夹等扩展据此列出词条，不需要关心翻译由谁、从哪种输入产生。
 
-### 3.4 `inserted`：文字已写入前台应用（由 Sayso 广播）
+### 3.5 `inserted`：文字已写入前台应用（hook，由 Sayso 广播）
 
-任一扩展通过 `sayso.insert` 或块上的 `insert` 操作写入成功后，Sayso 广播给订阅了它的其他扩展：
+通过 `sayso.insert` 或块上的 `insert` 操作写入成功后，Sayso 广播给订阅了它的其他扩展：
 
 ```json
 "text": "I have an apple.",
@@ -211,7 +227,7 @@ Sayso 在每个扩展的上下文中注入全局对象 `sayso`。块、数据、
 | `sayso.speak(text, language)` | — | 自动朗读；用户关闭了「自动朗读」时不发声 |
 | `await sayso.llm(system, user)` | `llm` | 用用户配置的模型与思考强度补全，返回模型输出的文本；未配置模型或调用失败时抛出异常 |
 | `await sayso.insert(text)` | `insert` | 写入触发命令时的前台应用，返回 `"inserted"` 或 `"copiedToClipboard"`；只能在处理 `command` 时使用 |
-| `sayso.publish({ type: "translation", pairs, context })` | `publish` | 广播 `translation`，见下文 |
+| `sayso.publish({ type: "translated", output, pairs, context })` | `publish` | 广播 `translated` hook，见下文；仅内置触发式扩展 |
 | `sayso.text.mayContainNative(text)` | — | 文本是否可能夹杂本地语言；纯目标语言的文本可以跳过模型调用 |
 | `sayso.fs.readText(path)` / `writeText(path, text)` / `appendText(path, text)` / `exists(path)` / `mkdir(path)` | `fs` | 同步读写 UTF-8 文本文件；相对路径相对扩展目录，`~/` 展开为用户主目录；`mkdir` 会创建中间目录 |
 | `console.log(…)` 等 | — | 输出的末尾 4KB 显示在扩展管理页的「最近一次运行」中 |
@@ -220,18 +236,18 @@ Sayso 在每个扩展的上下文中注入全局对象 `sayso`。块、数据、
 - 集合名只允许字母、数字、`_`、`-`。记录的 `key`、`createdAt`、`updatedAt` 由 Sayso 维护，扩展写入同名字段会被忽略。
 - 数据写入由 Sayso 串行、原子落盘，多个事件并发处理时不会写坏数据。
 
-### 广播
+### 广播 hook
 
-`sayso.publish` 让一个扩展把自己的结果告诉其他扩展。例如「划词翻译」完成后广播 `translation`，「生词本」「收藏夹」据此列出词条：
+`translated` 由触发式扩展在翻译完毕时用 `sayso.publish` 广播：
 
 ```js
-sayso.publish({ type: "translation", pairs: [{ target: "serendipity", native: "意外发现" }], context: null });
+sayso.publish({ type: "translated", output: "意外发现", pairs: [{ target: "serendipity", native: "意外发现" }], context: null });
 ```
 
-- 只能广播 `translation`；`command`、`action` 是定向事件，`inserted` 由 Sayso 发出，都不能广播。
+- 只能广播 `translated`；`input`、`inserted` 由 Sayso 发出，`command`、`action` 是定向事件，都不能广播。
 - Sayso 补全事件的 `id`、`timestamp`、`languages`、`surface`，并从触发的命令补全 `input` 与 `source`，
-  发给除广播者以外订阅了该事件的已启用扩展，它们输出的块显示在同一个候选框中。
-- 只能在处理 `command` 时广播：处理 `action` 与广播事件时不能再广播，避免循环。
+  发给除广播者以外订阅了该 hook 的已启用扩展，它们输出的块显示在同一个候选框中。
+- 只能在处理 `command` 时广播，避免循环。
 
 ### 运行环境
 
@@ -315,18 +331,18 @@ sayso.publish({ type: "translation", pairs: [{ target: "serendipity", native: "�
 - 提供命令 `translate`（「翻译并输入」），默认路由为「直接」（按住右 ⌥ 说话）；能力为 `blocks`、`publish`、`insert`、`llm`。
 - 用目标语言说话，不会的词用本地语言说：用 `sayso.llm` 生成完整的目标语言句子并调整必要的语法、语序，用 `sayso.insert` 写入前台应用。输出片段通过原文单元的编号范围建立对应关系，引用可重排，须覆盖原文词语且不能重复，独立标点可随整句重排删除或合并；原文无需由模型重抄。高亮和词对由实际文字变化推导，忽略共同前后文及纯大小写、空白、标点变化，模型不再提供语言标注字段。
 - `main.js` 负责执行流程，`prompt.js` 负责通用提示词组装，`languages.js` 负责语言资料及语言对规则，`transcript.js` 负责无损的原文引用与结果组装。只注入当前目标语言、本地语言的资料，并由等义例句生成当前语言对的完整分段示例。内置模块通过受限的嵌入式 ES 模块加载器导入，两端共用同一份源码。
-- 输出 `text` 块（id `text`，译文高亮、点击朗读），必要时附提示块（`clipboard`、`notice`），朗读每个翻译段，最后广播 `translation`（`context` 为写入的整句）。
+- 输出 `text` 块（id `text`，译文高亮、点击朗读），必要时附提示块（`clipboard`、`notice`），朗读每个翻译段，最后广播 `translated`（`output`、`context` 均为写入的整句）。
 - 未配置翻译模型或翻译失败时原样写入识别结果并提示原因，说的话不丢。
 
 ### 9.2 划词翻译 `sayso.selection`
 
 - 提供命令 `translate`（「翻译文字」），默认路由键 T、输入为选区（按住右 ⌥ 按 T）；能力为 `blocks`、`publish`、`llm`。
 - 输入为本地语言则译为目标语言，其他语言译为本地语言；输出译文（`translation`）、原文（`original`）两个 `text` 块。
-- 涉及目标语言时朗读目标语言一侧，并广播 `translation`（`context` 为 `null`）；第三种语言（如目标语言为日语时选中英文）只显示译文，不朗读、不广播。
+- 涉及目标语言时朗读目标语言一侧。翻译完毕广播 `translated`（`output` 为译文，`context` 为 `null`）；第三种语言（如目标语言为日语时选中英文）不朗读，词对为空。
 
 ### 9.3 生词本 `sayso.wordbook`
 
-- 订阅 `translation`、`action`，能力为 `blocks`、`store`，拥有「生词本」页签（集合 `words`）。
+- 事件式扩展：订阅 `translated`、`action`，能力为 `blocks`、`store`，拥有「生词本」页签（集合 `words`）。
 - 不自动记录。把翻译或语法修正词对逐个列为 `term` 块（id 为「语言|小写词条」），不因长度过滤句子；每个带「加入生词本」按钮。有多个词条时另有一个 `status` 块带「全部加入生词本」按钮。
 - 按钮是 `invoke` 操作，载荷中带上要加入的词条，扩展本身不保存候选状态。点击后以 `sayso.store.patch` 写入，`increment: { count: 1 }`；有 `context` 时记录为例句，没有时不覆盖已有例句。
 - 已加入的词条用同 id 的 `term` 块替换：去掉按钮，显示「已加入生词本（第 3 次）」。「全部加入」根据事件中的 `surface.blocks` 跳过已单独加入的词条，全部加入后按钮换成「已全部加入生词本」。

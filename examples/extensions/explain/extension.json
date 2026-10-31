@@ -1,11 +1,10 @@
 {
-  "schemaVersion": 3,
+  "schemaVersion": 4,
   "id": "com.sayso.example.explain",
   "name": "语法讲解 / Grammar",
-  "description": "讲解一句外语的语法，用你在 Sayso 中配置的模型，不需要自带 API Key / Explains the grammar of a sentence with the model you configured in Sayso",
+  "description": "翻译完成后显示「讲解语法」按钮，用你在 Sayso 中配置的模型讲解这句外语，不需要自带 API Key / Adds an Explain grammar button after each translation, using the model you configured in Sayso",
   "main": "main.js",
   "timeoutSeconds": 30,
-  "events": ["command"],
-  "capabilities": ["blocks", "llm"],
-  "commands": [{ "id": "explain", "title": "讲解语法 / Explain grammar" }]
+  "events": ["translated", "action"],
+  "capabilities": ["blocks", "llm"]
 }

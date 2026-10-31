@@ -164,7 +164,7 @@ mod tests {
         std::fs::create_dir_all(source.join("assets")).unwrap();
         std::fs::write(
             source.join(MANIFEST_FILE),
-            r#"{"schemaVersion":3,"id":"com.example.pack","name":"Pack","main":"main.js","events":["command"],"capabilities":["blocks"]}"#,
+            r#"{"schemaVersion":4,"id":"com.example.pack","name":"Pack","main":"main.js","events":["translated"],"capabilities":["blocks"]}"#,
         )
         .unwrap();
         std::fs::write(source.join("assets/data.bin"), vec![7u8; 4096]).unwrap();

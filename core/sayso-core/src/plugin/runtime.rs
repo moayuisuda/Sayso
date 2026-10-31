@@ -283,7 +283,7 @@ impl Invocation {
             return self.warn(CoreError::CapabilityNotGranted(missing).to_string());
         }
         // 广播只在处理命令时允许：处理广播事件时不能再广播，避免循环。
-        if matches!(instruction, Instruction::PublishTranslation { .. }) && self.event_type != EventType::Command {
+        if matches!(instruction, Instruction::PublishTranslated { .. }) && self.event_type != EventType::Command {
             return self.warn("publish is only allowed while handling the command event".into());
         }
         if let Err(error) = self.host.apply(instruction) {

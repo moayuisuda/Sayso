@@ -1,5 +1,5 @@
 // 内置扩展「划词翻译」：翻译输入的文字。本地语言译为目标语言，其他语言（目标语言或第三种语言）译为本地语言。
-// 涉及目标语言时朗读目标语言一侧，并广播 translation，生词本等扩展据此记录；第三种语言只显示译文。
+// 涉及目标语言时朗读目标语言一侧；翻译完毕后广播 translated hook，第三种语言的词对为空。
 
 const { target, native } = sayso.languages;
 const chinese = native.code === "zh";
@@ -19,14 +19,13 @@ export async function command(event) {
   sayso.blocks.upsert(textBlock("translation", translation, "primary", to));
   sayso.blocks.upsert(textBlock("original", text, "secondary", from));
 
-  // 统一成「目标语言 · 本地语言」词对，与语音翻译的结果同一形式。第三种语言不是在学的语言，不朗读也不广播。
+  // 统一成「目标语言 · 本地语言」词对，与语音翻译的结果同一形式。第三种语言不是在学的语言，不朗读也没有词对。
   const pair =
     from === target.code ? { target: text, native: translation }
     : from === native.code ? { target: translation, native: text }
     : null;
-  if (pair === null) return;
-  sayso.speak(pair.target, target.code);
-  sayso.publish({ type: "translation", pairs: [pair], context: null });
+  if (pair !== null) sayso.speak(pair.target, target.code);
+  sayso.publish({ type: "translated", output: translation, pairs: pair === null ? [] : [pair], context: null });
 }
 
 function systemPrompt() {

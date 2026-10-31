@@ -15,7 +15,6 @@ use sayso_core::settings::{CommandKey, Hotkey, PlatformDefaults, RouteKey, Secre
 use sayso_core::{Core, CoreObserver, Platform, PlatformError};
 
 const SELECTION_KEY: u16 = 17;
-const ECHO_KEY: u16 = 5;
 
 #[derive(Default)]
 struct FakePlatform {
@@ -168,7 +167,7 @@ impl Drop for LocalAsr {
     }
 }
 
-/// 本地 HTTP 服务提供转写，数据目录只安装处理文本的 echo 扩展。
+/// 本地 HTTP 服务提供转写，数据目录只安装订阅 `input` hook 的 echo 扩展。
 fn fixture(selection: Option<&str>) -> (tempfile::TempDir, Core, Arc<FakePlatform>, Arc<RecordingObserver>, LocalAsr) {
     let data = tempfile::tempdir().unwrap();
     let server = LocalAsr::start();
@@ -182,11 +181,11 @@ fn fixture(selection: Option<&str>) -> (tempfile::TempDir, Core, Arc<FakePlatfor
     };
     install(
         "echo",
-        r#"{"schemaVersion":3,"id":"test.echo","name":"Echo","main":"main.js","events":["command"],
-            "capabilities":["blocks"],"commands":[{"id":"show","title":"Show"}]}"#,
+        r#"{"schemaVersion":4,"id":"test.echo","name":"Echo","main":"main.js","events":["input"],
+            "capabilities":["blocks"]}"#,
         &[(
             "main.js",
-            r#"export function command(event) {
+            r#"export function input(event) {
                  sayso.blocks.upsert({ id: "echo", type: "status", message: `${event.input.via}: ${event.input.text}` });
                  sayso.speak(event.input.text, "ko");
                }"#,
@@ -211,11 +210,6 @@ fn fixture(selection: Option<&str>) -> (tempfile::TempDir, Core, Arc<FakePlatfor
     );
     settings.enabled_extensions.push("test.echo".into());
     core.update_settings(settings).unwrap();
-    core.bind_command(
-        CommandKey { extension_id: "test.echo".into(), command_id: "show".into() },
-        Some(RouteKey::Key { code: ECHO_KEY }),
-    )
-    .unwrap();
     (data, core, platform, observer, server)
 }
 
@@ -304,8 +298,7 @@ fn speech_flow_reports_the_real_insertion_error_and_keeps_the_transcript() {
 #[test]
 fn panel_dismissal_ignores_stale_ids_and_never_cancels_recording_or_processing() {
     let (_data, core, platform, observer, _server) = fixture(Some("괜찮아"));
-    core.set_route_input(RouteKey::Key { code: ECHO_KEY }, InputSource::Selection).unwrap();
-    core.trigger(RouteKey::Key { code: ECHO_KEY });
+    core.trigger(RouteKey::Key { code: SELECTION_KEY });
     let first = wait_for_surface(&core, |surface| !surface.working);
     let updates = observer.states.lock().unwrap().len();
     core.set_hovering(true);
@@ -313,7 +306,7 @@ fn panel_dismissal_ignores_stale_ids_and_never_cancels_recording_or_processing()
     core.dismiss_surface(first.id.clone());
     assert_eq!(core.session_state(), SessionState::Idle);
 
-    core.trigger(RouteKey::Key { code: ECHO_KEY });
+    core.trigger(RouteKey::Key { code: SELECTION_KEY });
     let second = wait_for_surface(&core, |surface| !surface.working);
     assert_ne!(first.id, second.id);
     let updates = observer.states.lock().unwrap().len();
@@ -339,9 +332,11 @@ fn panel_dismissal_ignores_stale_ids_and_never_cancels_recording_or_processing()
 fn speech_route_key_redirects_the_recording() {
     let (_data, core, platform, _, _server) = fixture(Some(""));
 
+    core.set_route_input(RouteKey::Key { code: SELECTION_KEY }, InputSource::Speech).unwrap();
     core.trigger(RouteKey::Direct);
-    core.trigger(RouteKey::Key { code: ECHO_KEY });
-    assert!(matches!(core.session_state(), SessionState::Recording { commands, .. } if commands == ["Show"]));
+    core.trigger(RouteKey::Key { code: SELECTION_KEY });
+    assert!(matches!(core.session_state(), SessionState::Recording { commands, .. }
+        if commands == ["翻译文字 / Translate text"]));
     core.push_audio(vec![0; 16000]);
     core.stop();
 
@@ -356,11 +351,11 @@ fn speech_route_key_redirects_the_recording() {
 fn speech_failure_preserves_content_and_retry_clears_the_notice() {
     let (_data, core, platform, _, _server) = fixture(Some("괜찮아"));
     *platform.speech_error.lock().unwrap() = Some("ko-KR voice is not installed".into());
-    core.set_route_input(RouteKey::Key { code: ECHO_KEY }, InputSource::Selection).unwrap();
-    core.trigger(RouteKey::Key { code: ECHO_KEY });
-    let surface = wait_for_surface(&core, |surface| !surface.working && !block_ids(surface, "sayso.app").is_empty());
+    core.trigger(RouteKey::Key { code: SELECTION_KEY });
+    let surface = wait_for_surface(&core, |surface| {
+        !surface.working && block_ids(surface, "sayso.app").contains(&"speech".to_string())
+    });
     assert_eq!(status_message(&surface, "test.echo"), "selection: 괜찮아");
-    assert!(status_message(&surface, "sayso.app").contains("ko-KR voice is not installed"));
     assert_eq!(*platform.spoken.lock().unwrap(), [("괜찮아".into(), Language::Korean)]);
 
     let play = || {
@@ -377,11 +372,11 @@ fn speech_failure_preserves_content_and_retry_clears_the_notice() {
     };
     play();
     let failed = wait_for_surface(&core, |_| true);
-    assert_eq!(block_ids(&failed, "sayso.app"), ["speech"]);
+    assert!(block_ids(&failed, "sayso.app").contains(&"speech".to_string()));
     *platform.speech_error.lock().unwrap() = None;
     play();
     let recovered = wait_for_surface(&core, |_| true);
-    assert!(block_ids(&recovered, "sayso.app").is_empty());
+    assert!(!block_ids(&recovered, "sayso.app").contains(&"speech".to_string()));
     assert_eq!(status_message(&recovered, "test.echo"), "selection: 괜찮아");
 
     let attempts = platform.spoken.lock().unwrap().len();

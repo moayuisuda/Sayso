@@ -66,11 +66,11 @@ fn extension_package_roundtrip_preserves_code_and_updates_core_catalog() {
     let directory = tempfile::tempdir().unwrap();
     let extension = directory.path().join("Extensions/example");
     std::fs::create_dir_all(&extension).unwrap();
-    let manifest = json!({"schemaVersion":3,"id":"test.package","name":"Package test","main":"main.js","events":["command"],"capabilities":["blocks"],"commands":[{"id":"run","title":"Run"}]});
+    let manifest = json!({"schemaVersion":4,"id":"test.package","name":"Package test","main":"main.js","events":["translated"],"capabilities":["blocks"]});
     std::fs::write(extension.join("extension.json"), manifest.to_string()).unwrap();
     std::fs::write(
         extension.join("main.js"),
-        "export function command() { sayso.blocks.upsert({ id: 'ok', type: 'status', message: 'ok' }); }",
+        "export function translated() { sayso.blocks.upsert({ id: 'ok', type: 'status', message: 'ok' }); }",
     )
     .unwrap();
     let client = Client::new(directory.path());
@@ -79,7 +79,7 @@ fn extension_package_roundtrip_preserves_code_and_updates_core_catalog() {
     client.call("uninstall", json!("test.package"));
     let staged = client.call("openPackage", json!(package));
     assert_eq!(staged["manifest"]["id"], manifest["id"]);
-    assert_eq!(staged["manifest"]["commands"], manifest["commands"]);
+    assert_eq!(staged["manifest"]["events"], manifest["events"]);
     assert_eq!(staged["replacing"], false);
     client.call("installPackage", staged["token"].clone());
     let catalog = client.call("extensions", Value::Null);
@@ -87,7 +87,7 @@ fn extension_package_roundtrip_preserves_code_and_updates_core_catalog() {
     assert_eq!(installed["enabled"], true);
     assert_eq!(
         std::fs::read_to_string(directory.path().join("Extensions/test.package/main.js")).unwrap(),
-        "export function command() { sayso.blocks.upsert({ id: 'ok', type: 'status', message: 'ok' }); }"
+        "export function translated() { sayso.blocks.upsert({ id: 'ok', type: 'status', message: 'ok' }); }"
     );
 }
 

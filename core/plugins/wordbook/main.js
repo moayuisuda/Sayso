@@ -7,7 +7,7 @@ const ADD_ALL = "add-all";
 const chinese = sayso.languages.native.code === "zh";
 
 /** 不自动记录：每个翻译或语法修正片段都提供加入入口，不因长度静默丢掉句子。 */
-export function translation(event) {
+export function translated(event) {
   const entries = event.pairs.map((pair) => ({
     term: pair.target, gloss: pair.native, example: event.context ?? null, language: event.languages.target,
   }));

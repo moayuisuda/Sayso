@@ -153,15 +153,15 @@ impl Host for DispatchHost {
                     self.inner.speak(text, language, self.surface_id.as_deref());
                 }
             }
-            Instruction::PublishTranslation { pairs, context } => {
+            Instruction::PublishTranslated { output, pairs, context } => {
                 let command = self
                     .command
                     .as_ref()
                     .ok_or_else(|| CoreError::InvalidInstruction("publish needs a command event".into()))?;
                 let translation =
-                    Translation { input: command.input.clone(), pairs, context, source: command.source.clone() };
+                    Translation { input: command.input.clone(), output, pairs, context, source: command.source.clone() };
                 let route = Route::Republished { by: self.extension_id.clone() };
-                self.inner.dispatch(Payload::Translation(translation), self.surface_id.as_deref(), route);
+                self.inner.dispatch(Payload::Translated(translation), self.surface_id.as_deref(), route);
             }
         }
         Ok(())

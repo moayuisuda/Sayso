@@ -25,7 +25,7 @@ pub struct Manifest {
     pub capabilities: Vec<Capability>,
     #[serde(default)]
     pub tab: Option<TabSpec>,
-    /// 扩展提供的命令，由用户绑定到路由触发，以 `command` 事件交给本扩展。
+    /// 扩展提供的命令，由用户绑定到路由触发，以 `command` 事件交给本扩展。只有内置的触发式扩展可以声明。
     #[serde(default)]
     pub commands: Vec<CommandSpec>,
 }
@@ -99,6 +99,14 @@ impl Manifest {
         }
         if self.main.trim().is_empty() {
             return fail("main is required".into());
+        }
+        // 第三方扩展都是事件式扩展：命令、command 事件与广播只属于内置的触发式扩展。
+        if !built_in
+            && (!self.commands.is_empty()
+                || self.events.contains(&EventType::Command)
+                || self.grants(Capability::Publish))
+        {
+            return fail("commands, the command event and publish are reserved for built-in extensions".into());
         }
         if !self.commands.is_empty() {
             if !self.events.contains(&EventType::Command) {

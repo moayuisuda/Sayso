@@ -54,7 +54,7 @@ bash scripts/build-core.sh                   # 构建 core 并生成 Swift 绑�
 INSTALL=1 bash scripts/bundle-app.sh         # 构建 core 与应用，打包并安装到 /Applications
 ```
 
-打包脚本默认用登录钥匙串中的 Apple Development 证书签名，签名身份在重新打包后保持不变，系统授权不会失效；没有证书时退回 ad-hoc 签名，每次重新打包后需要重新授权辅助功能。
+打包脚本优先用登录钥匙串中的 Developer ID Application 证书签名，与发布版身份相同，本地构建与发布版之间切换不需要重新授权；没有时用 Apple Development 证书，都没有时退回 ad-hoc 签名，每次重新打包后需要重新授权。
 
 ### Windows
 

@@ -1,5 +1,5 @@
 {
-  "schemaVersion": 3,
+  "schemaVersion": 4,
   "id": "sayso.dictation",
   "name": "语音翻译 / Speech Translate",
   "description": "用目标语言说话，不会的词用母语说，翻译后写入当前应用 / Speak your target language, say unknown words in your native language, and type the translated sentence",

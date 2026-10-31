@@ -334,7 +334,10 @@ impl Inner {
     }
 
     /// 把命令事件分别发给本次每个命令所属的扩展，各扩展并发处理；失败原因显示在候选框中。
+    /// 同时向订阅者广播 `input` hook。
     fn invoke_commands(self: &Arc<Self>, command: CommandInput) {
+        let hook = Payload::Input { input: command.input.clone(), source: command.source.clone() };
+        self.dispatch(hook, Some(&command.surface_id), Route::Republished { by: APP_SOURCE.into() });
         for key in command.commands {
             let payload = Payload::Command {
                 command: CommandRef { id: key.command_id },

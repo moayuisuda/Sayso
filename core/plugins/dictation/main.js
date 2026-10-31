@@ -1,7 +1,7 @@
 // 内置扩展「语音翻译」：用目标语言说话，不会的词用本地语言说，翻译成完整的目标语言句子后写入前台应用。
 //
-// 命令触发 → 混说翻译（sayso.llm）→ 写入（sayso.insert）→ 输出文本块与提示 → 朗读翻译块 → 广播 translation，
-// 生词本等扩展据此记录。翻译失败时原样写入识别结果，保证说的话不丢。
+// 命令触发 → 混说翻译（sayso.llm）→ 写入（sayso.insert）→ 输出文本块与提示 → 朗读翻译块 → 广播 translated hook，
+// 生词本等事件式扩展据此添加词条与按钮。翻译失败时原样写入识别结果，保证说的话不丢。
 
 import { createDictationPrompt } from "./prompt.js";
 import { referenceTranscript, assembleTranslation } from "./transcript.js";
@@ -28,7 +28,8 @@ export async function command(event) {
 
   const pairs = segments.filter(isTranslation).map((segment) => ({ target: segment.text, native: segment.source }));
   for (const pair of pairs) sayso.speak(pair.target, target.code);
-  if (pairs.length > 0) sayso.publish({ type: "translation", pairs, context: output });
+  // 每次都广播，纯目标语言输入时词对为空，订阅者仍能拿到写入的整句。
+  sayso.publish({ type: "translated", output, pairs, context: output });
 }
 
 /**

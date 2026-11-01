@@ -32,12 +32,13 @@ const COMPRESSION_NONE: u8 = 0b0000;
 pub(super) struct Wire {
     api_key: String,
     resource_id: String,
+    context: String,
     current_text: String,
 }
 
 impl Wire {
-    pub(super) fn new(api_key: String, resource_id: String) -> Self {
-        Wire { api_key, resource_id, current_text: String::new() }
+    pub(super) fn new(api_key: String, resource_id: String, context: String) -> Self {
+        Wire { api_key, resource_id, context, current_text: String::new() }
     }
 }
 
@@ -54,7 +55,7 @@ impl streaming::Wire for Wire {
 
     /// 首帧：音频格式与识别参数。中英混说无需指定语言，模型原生支持。
     fn opening_message(&self) -> Result<Message, CoreError> {
-        let payload = serde_json::json!({
+        let mut payload = serde_json::json!({
             "user": { "uid": UID },
             "audio": { "format": "pcm", "codec": "raw", "rate": SAMPLE_RATE, "bits": 16, "channel": 1 },
             "request": {
@@ -69,6 +70,11 @@ impl streaming::Wire for Wire {
                 "enable_nonstream": true,
             },
         });
+        // 个人背景作为对话上下文提供，协议要求序列化成 JSON 字符串。
+        if !self.context.is_empty() {
+            let context = serde_json::json!({"context_type": "dialog_ctx", "context_data": [{"text": self.context}]});
+            payload["request"]["corpus"] = serde_json::json!({ "context": context.to_string() });
+        }
         Ok(Message::binary(frame(
             FULL_CLIENT_REQUEST,
             FLAG_NONE,
@@ -239,5 +245,23 @@ mod tests {
         data.extend_from_slice(&(message.len() as u32).to_be_bytes());
         data.extend_from_slice(message);
         assert_eq!(decode(&data), Err("quota exceeded (45000001)".into()));
+    }
+
+    #[test]
+    fn sends_the_user_context_as_a_serialized_dialog_context() {
+        use streaming::Wire as _;
+        let payload = |context: &str| {
+            let Message::Binary(data) = Wire::new("key".into(), "model".into(), context.into()).opening_message().unwrap()
+            else {
+                panic!("expected a binary frame")
+            };
+            serde_json::from_slice::<serde_json::Value>(&data[8..]).unwrap()
+        };
+        assert!(payload("")["request"].get("corpus").is_none());
+        let context = payload("I am an engineer")["request"]["corpus"]["context"].as_str().unwrap().to_string();
+        assert_eq!(
+            serde_json::from_str::<serde_json::Value>(&context).unwrap(),
+            serde_json::json!({"context_type": "dialog_ctx", "context_data": [{"text": "I am an engineer"}]})
+        );
     }
 }

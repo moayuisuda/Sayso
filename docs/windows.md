@@ -54,8 +54,8 @@ Rust 测试验证会话、扩展运行时、协议、存储，以及跨 ABI 的�
 
 云端测试必须使用真实服务和有效配置；本地检查不代表云端语音识别与翻译已通过。
 
-`core/sayso-core/examples/test_qwen.rs` 可回放 16 kHz 单声道 Int16 PCM 文件，使用正式的识别管线调用真实服务。
-参数为音频路径、目标语言代码和本地语言代码；API Key 从标准输入读取，不放入命令参数或输出。
+`core/sayso-core/examples/test_asr.rs` 可回放 16 kHz 单声道 Int16 PCM 文件，使用正式的识别管线调用真实服务。
+参数为识别服务（`volcengine`、`qwen`、`soniox`）、音频路径、目标语言代码、本地语言代码和可选的个人背景；API Key 从标准输入读取，不放入命令参数或输出。
 
 `core/sayso-core/examples/test_dictation.rs` 用正式内置插件和 LLM 客户端回放文本：参数为设置文件和用例 JSON 路径，密钥从标准输入读取。
 用例格式为 `[{"transcript":"I have a 苹果.","languages":{"target":"en","native":"zh"}}]`。回放同时执行正式生词本插件，输出整句译文、高亮片段、生词块与失败提示，不写入用户当前应用或生词本，也不播放语音。

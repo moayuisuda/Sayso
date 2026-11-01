@@ -1,4 +1,5 @@
-//! 真实服务回放检查：参数为 16 kHz 单声道 Int16 PCM 文件和目标/本地语言代码，API Key 从标准输入读取。
+//! 真实服务回放检查：参数为识别服务（volcengine / qwen / soniox）、16 kHz 单声道 Int16 PCM 文件、目标/本地语言代码，
+//! 以及可选的个人背景；API Key 从标准输入读取。
 use sayso_core::asr::{AsrConfig, Recognition};
 use sayso_core::protocol::{Language, LanguagePair};
 use std::io::BufRead;
@@ -10,20 +11,24 @@ use std::sync::{
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let args: Vec<_> = std::env::args().collect();
-    if args.len() != 4 {
-        return Err("Usage: test_qwen audio.pcm target-language native-language; API key on stdin".into());
+    if !(5..=6).contains(&args.len()) {
+        return Err("Usage: test_asr service audio.pcm target-language native-language [context]; API key on stdin".into());
     }
     let mut api_key = String::new();
     std::io::stdin().lock().read_line(&mut api_key)?;
-    let config = AsrConfig::Qwen {
-        api_key: api_key.trim().to_string(),
-        context: String::new(),
-        languages: LanguagePair {
-            target: Language::from_code(&args[2]).ok_or("Invalid target language")?,
-            native: Language::from_code(&args[3]).ok_or("Invalid native language")?,
-        },
+    let api_key = api_key.trim().to_string();
+    let languages = LanguagePair {
+        target: Language::from_code(&args[3]).ok_or("Invalid target language")?,
+        native: Language::from_code(&args[4]).ok_or("Invalid native language")?,
     };
-    let audio = std::fs::read(&args[1])?;
+    let context = args.get(5).cloned().unwrap_or_default();
+    let config = match args[1].as_str() {
+        "volcengine" => AsrConfig::Volcengine { api_key, resource_id: "volc.seedasr.sauc.duration".into(), context },
+        "qwen" => AsrConfig::Qwen { api_key, languages, context },
+        "soniox" => AsrConfig::Soniox { api_key, languages, context },
+        _ => return Err("Unknown service".into()),
+    };
+    let audio = std::fs::read(&args[2])?;
     if audio.is_empty() || audio.len() % 2 != 0 {
         return Err("Expected nonempty 16-bit PCM audio".into());
     }

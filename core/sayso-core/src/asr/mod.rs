@@ -31,11 +31,12 @@ const BATCH_FINISH_TIMEOUT: Duration = Duration::from_secs(60);
 
 /// 创建识别会话所需的全部参数，由选用的识别来源（见 [`source`]）在每次录音开始时生成。
 #[derive(Clone, Debug)]
+/// `context` 为用户的个人背景，空字符串表示不提供。
 pub enum AsrConfig {
-    Volcengine { api_key: String, resource_id: String },
+    Volcengine { api_key: String, resource_id: String, context: String },
     Qwen { api_key: String, languages: LanguagePair, context: String },
-    Soniox { api_key: String, languages: LanguagePair },
-    OpenAiCompatible { api_key: String, base_url: String, model: String, languages: LanguagePair },
+    Soniox { api_key: String, languages: LanguagePair, context: String },
+    OpenAiCompatible { api_key: String, base_url: String, model: String, languages: LanguagePair, context: String },
 }
 
 impl AsrConfig {
@@ -77,17 +78,17 @@ impl Recognition {
         let finish_timeout = config.finish_timeout();
         let task = runtime.spawn(async move {
             let outcome = match config {
-                AsrConfig::Volcengine { api_key, resource_id } => {
-                    streaming::run(volcengine::Wire::new(api_key, resource_id), chunks, partial).await
+                AsrConfig::Volcengine { api_key, resource_id, context } => {
+                    streaming::run(volcengine::Wire::new(api_key, resource_id, context), chunks, partial).await
                 }
                 AsrConfig::Qwen { api_key, languages, context } => {
                     streaming::run(qwen::Wire::new(api_key, languages, context), chunks, partial).await
                 }
-                AsrConfig::Soniox { api_key, languages } => {
-                    streaming::run(soniox::Wire::new(api_key, languages), chunks, partial).await
+                AsrConfig::Soniox { api_key, languages, context } => {
+                    streaming::run(soniox::Wire::new(api_key, languages, context), chunks, partial).await
                 }
-                AsrConfig::OpenAiCompatible { api_key, base_url, model, languages } => {
-                    openai_transcription::run(&http, &api_key, &base_url, &model, languages, chunks).await
+                AsrConfig::OpenAiCompatible { api_key, base_url, model, languages, context } => {
+                    openai_transcription::run(&http, &api_key, &base_url, &model, languages, &context, chunks).await
                 }
             };
             let _ = sender.send(outcome.map(|text| text.trim().to_string()));

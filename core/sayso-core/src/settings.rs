@@ -75,6 +75,8 @@ pub struct PlatformDefaults {
 pub struct Settings {
     pub target_language: Language,
     pub native_language: Language,
+    /// 用户自述的身份或领域（如「我是软件工程师」），提供给识别与翻译模型以提升专业词汇的准确率。
+    pub user_context: String,
     pub hotkey_style: HotkeyStyle,
     pub trigger_key: Hotkey,
     /// 全部路由；「直接」路由总是存在。
@@ -94,6 +96,9 @@ pub struct Settings {
     pub enabled_extensions: Vec<String>,
 }
 
+/// 个人背景的长度上限（字符），取各识别服务上下文限制中最小的千问 400 字。
+pub const USER_CONTEXT_LIMIT: usize = 400;
+
 pub const SPEECH_TRANSLATE_ID: &str = "sayso.dictation";
 pub const SELECTION_TRANSLATE_ID: &str = "sayso.selection";
 pub const WORDBOOK_ID: &str = "sayso.wordbook";
@@ -107,6 +112,7 @@ impl Settings {
         Settings {
             target_language: Language::English,
             native_language: Language::Chinese,
+            user_context: String::new(),
             hotkey_style: HotkeyStyle::Hold,
             trigger_key: platform.trigger_key,
             routes: vec![
@@ -161,9 +167,10 @@ impl Settings {
         }
     }
 
-    /// 规整用户提交的设置：切换翻译服务时载入该服务的默认地址与模型；「直接」路由总是存在；
+    /// 规整用户提交的设置：个人背景截断到长度上限；切换翻译服务时载入该服务的默认地址与模型；「直接」路由总是存在；
     /// 删除的路由键上的命令绑定随之移除，不再绑定命令的路由键随之删除。
     pub fn normalized(mut self, previous: &Settings) -> Self {
+        self.user_context = self.user_context.chars().take(USER_CONTEXT_LIMIT).collect();
         if self.llm_provider != previous.llm_provider {
             self.llm_base_url = self.llm_provider.default_base_url().into();
             self.llm_model = self.llm_provider.default_model().into();

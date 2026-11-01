@@ -20,6 +20,7 @@ pub(super) async fn run(
     base_url: &str,
     model: &str,
     languages: LanguagePair,
+    context: &str,
     mut chunks: mpsc::UnboundedReceiver<Vec<u8>>,
 ) -> Result<String, CoreError> {
     let mut audio = Vec::new();
@@ -41,9 +42,9 @@ pub(super) async fn run(
         .file_name("audio.wav")
         .mime_str("audio/wav")
         .map_err(server_error)?;
-    // 不指定 language，改用提示词告知会出现两种语言，让模型保留原语言转写而不是翻译。
+    // 不指定 language，改用提示词告知会出现两种语言，让模型保留原语言转写而不是翻译；个人背景帮助识别专业词汇。
     let prompt = format!(
-        "The speaker mixes {} and {}. Transcribe each word in the language it was spoken.",
+        "The speaker mixes {} and {}. Transcribe each word in the language it was spoken. {context}",
         languages.target.english_name(),
         languages.native.english_name()
     );
@@ -51,7 +52,7 @@ pub(super) async fn run(
         .part("file", file)
         .text("model", model.to_string())
         .text("response_format", "json")
-        .text("prompt", prompt);
+        .text("prompt", prompt.trim_end().to_string());
 
     let mut request = http.post(url).multipart(form).timeout(REQUEST_TIMEOUT);
     // 本地服务可不启用认证；仅配置密钥时发送 Authorization。

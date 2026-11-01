@@ -209,15 +209,17 @@ impl Service {
     fn config(self, values: &HashMap<String, String>, settings: &Settings) -> AsrConfig {
         let value = |key: &str| values[key].clone();
         let languages = settings.languages();
+        let context = settings.user_context.trim().to_string();
         match self {
-            Self::Volcengine => AsrConfig::Volcengine { api_key: value(API_KEY), resource_id: value(MODEL) },
-            Self::Qwen => AsrConfig::Qwen { api_key: value(API_KEY), languages, context: String::new() },
-            Self::Soniox => AsrConfig::Soniox { api_key: value(API_KEY), languages },
+            Self::Volcengine => AsrConfig::Volcengine { api_key: value(API_KEY), resource_id: value(MODEL), context },
+            Self::Qwen => AsrConfig::Qwen { api_key: value(API_KEY), languages, context },
+            Self::Soniox => AsrConfig::Soniox { api_key: value(API_KEY), languages, context },
             Self::OpenAiCompatible => AsrConfig::OpenAiCompatible {
                 api_key: value(API_KEY),
                 base_url: value(BASE_URL),
                 model: value(MODEL),
                 languages,
+                context,
             },
         }
     }
@@ -306,12 +308,13 @@ mod tests {
     }
 
     #[test]
-    fn qwen_requires_a_key_and_starts_without_context() {
-        let settings = settings(QWEN);
+    fn qwen_requires_a_key_and_carries_the_user_context() {
+        let mut settings = settings(QWEN);
         assert!(config(&settings, &Secrets::default()).is_none());
+        settings.user_context = " I am a software engineer. ".into();
         let Some(AsrConfig::Qwen { context, .. }) = config(&settings, &secret(QWEN, "key")) else {
             panic!("expected Qwen config")
         };
-        assert!(context.is_empty());
+        assert_eq!(context, "I am a software engineer.");
     }
 }

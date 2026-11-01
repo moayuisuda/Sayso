@@ -225,7 +225,7 @@ Sayso 在每个扩展的上下文中注入全局对象 `sayso`。块、数据、
 | `sayso.store.delete(collection, key)` | `store` | 删除一条记录 |
 | `await sayso.store.list(collection)` | `store` | 读取集合中的全部记录（含本次已执行的写入） |
 | `sayso.speak(text, language)` | — | 自动朗读；用户关闭了「自动朗读」时不发声 |
-| `await sayso.llm(system, user)` | `llm` | 用用户配置的模型与思考强度补全，返回模型输出的文本；未配置模型或调用失败时抛出异常 |
+| `await sayso.llm(system, user)` | `llm` | 用用户配置的模型与思考强度补全，返回模型输出的文本；用户填写了个人背景时，core 会把它附在 `system` 之后。未配置模型或调用失败时抛出异常 |
 | `await sayso.insert(text)` | `insert` | 写入触发命令时的前台应用，返回 `"inserted"` 或 `"copiedToClipboard"`；只能在处理 `command` 时使用 |
 | `sayso.publish({ type: "translated", output, pairs, context })` | `publish` | 广播 `translated` hook，见下文；仅内置触发式扩展 |
 | `sayso.text.mayContainNative(text)` | — | 文本是否可能夹杂本地语言；纯目标语言的文本可以跳过模型调用 |

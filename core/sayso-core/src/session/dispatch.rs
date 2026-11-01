@@ -9,6 +9,7 @@ use crate::app::Inner;
 use crate::error::CoreError;
 use crate::extensions::Route;
 use crate::l10n::tr;
+use crate::llm::with_user_context;
 use crate::plugin::{run, Host, Instruction, RunResult, RunStatus};
 use crate::protocol::{AppInfo, Delivery, Event, Input, Payload, Translation};
 use crate::store::StoreRecord;
@@ -169,6 +170,7 @@ impl Host for DispatchHost {
 
     async fn complete(&self, system: String, user: String) -> Result<String, CoreError> {
         let endpoint = self.inner.llm_endpoint().ok_or(CoreError::ModelNotConfigured)?;
+        let system = with_user_context(&system, &self.inner.settings().user_context);
         endpoint.complete(&self.inner.http, &system, &user).await
     }
 

@@ -17,12 +17,13 @@ const MARKER_TOKENS: [&str; 2] = ["<end>", "<fin>"];
 pub(super) struct Wire {
     api_key: String,
     languages: LanguagePair,
+    context: String,
     finalized_text: String,
 }
 
 impl Wire {
-    pub(super) fn new(api_key: String, languages: LanguagePair) -> Self {
-        Wire { api_key, languages, finalized_text: String::new() }
+    pub(super) fn new(api_key: String, languages: LanguagePair, context: String) -> Self {
+        Wire { api_key, languages, context, finalized_text: String::new() }
     }
 }
 
@@ -49,7 +50,7 @@ impl streaming::Wire for Wire {
     }
 
     fn opening_message(&self) -> Result<Message, CoreError> {
-        let payload = serde_json::json!({
+        let mut payload = serde_json::json!({
             "api_key": self.api_key,
             "model": MODEL,
             "audio_format": "pcm_s16le",
@@ -59,6 +60,9 @@ impl streaming::Wire for Wire {
             "language_hints_strict": true,
             "enable_endpoint_detection": true,
         });
+        if !self.context.is_empty() {
+            payload["context"] = serde_json::json!({ "text": self.context });
+        }
         Ok(Message::text(payload.to_string()))
     }
 

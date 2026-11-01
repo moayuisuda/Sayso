@@ -68,7 +68,7 @@ private struct SettingsTabBar: View {
 
     var body: some View {
         VStack(spacing: 2) {
-            Text(items.first { $0.tab == selection }?.title ?? L("言出", "Sayso"))
+            Text(items.first { $0.tab == selection }?.title ?? "Sayso")
                 .font(.system(size: 13, weight: .semibold))
                 .frame(height: 28)
             HStack(spacing: 4) {

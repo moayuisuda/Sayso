@@ -47,7 +47,7 @@ private struct MenuBarIcon: View {
         if case .recording = model.session {
             Image(systemName: "mic.fill")
         } else {
-            Image(systemName: "character.bubble")
+            Image(nsImage: AppIcon.menuBar)
         }
     }
 }
@@ -70,7 +70,7 @@ private struct MenuBarContent: View {
         Button(L("设置…", "Settings…")) { open(.general) }
             .keyboardShortcut(",")
         Divider()
-        Button(L("退出言出", "Quit Sayso")) { NSApp.terminate(nil) }
+        Button(L("退出 Sayso", "Quit Sayso")) { NSApp.terminate(nil) }
             .keyboardShortcut("q")
     }
 

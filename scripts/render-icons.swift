@@ -2,20 +2,23 @@
 // 从 Resources/AppIcon.svg 生成各平台图标：
 //   Resources/AppIcon.icns          macOS 应用图标（保留系统网格留白）
 //   windows/Sayso/Assets/Sayso.ico  Windows 应用与托盘图标（只裁取主体）
+//   Resources/MenuBarIcon.png       macOS 菜单栏模板图标（主体实心、字形镂空的单色蒙版）
 // 用法：swift scripts/render-icons.swift
 import AppKit
 
 let root = URL(fileURLWithPath: #filePath).deletingLastPathComponent().deletingLastPathComponent()
 let source = root.appendingPathComponent("Resources/AppIcon.svg")
 
-guard let svg = NSImage(contentsOf: source) else { fatalError("无法读取 \(source.path)") }
+guard let svgText = try? String(contentsOf: source, encoding: .utf8), let svg = NSImage(data: Data(svgText.utf8)) else {
+    fatalError("无法读取 \(source.path)")
+}
 
 /// SVG 画布尺寸与 macOS 网格中主体所在区域（与 AppIcon.svg 中的 rect 保持一致）。
 let canvas = NSRect(x: 0, y: 0, width: 1024, height: 1024)
 let body = NSRect(x: 100, y: 100, width: 824, height: 824)
 
-/// 将 SVG 的 `region` 区域栅格化为 `size`×`size` 的 PNG。
-func png(_ size: Int, region: NSRect) -> Data {
+/// 将 SVG 的 `region` 区域栅格化为 `size`×`size` 的位图。
+func bitmap(_ image: NSImage, size: Int, region: NSRect) -> NSBitmapImageRep {
     let rep = NSBitmapImageRep(
         bitmapDataPlanes: nil, pixelsWide: size, pixelsHigh: size,
         bitsPerSample: 8, samplesPerPixel: 4, hasAlpha: true, isPlanar: false,
@@ -24,10 +27,14 @@ func png(_ size: Int, region: NSRect) -> Data {
     NSGraphicsContext.saveGraphicsState()
     NSGraphicsContext.current = NSGraphicsContext(bitmapImageRep: rep)
     NSGraphicsContext.current?.imageInterpolation = .high
-    svg.size = canvas.size
-    svg.draw(in: NSRect(x: 0, y: 0, width: size, height: size), from: region, operation: .copy, fraction: 1)
+    image.size = canvas.size
+    image.draw(in: NSRect(x: 0, y: 0, width: size, height: size), from: region, operation: .copy, fraction: 1)
     NSGraphicsContext.restoreGraphicsState()
-    return rep.representation(using: .png, properties: [:])!
+    return rep
+}
+
+func png(_ size: Int, region: NSRect) -> Data {
+    bitmap(svg, size: size, region: region).representation(using: .png, properties: [:])!
 }
 
 /// macOS：按 iconutil 约定写出 iconset 后打包为 icns。
@@ -69,6 +76,36 @@ func writeICO(to output: URL) throws {
     try data.write(to: output)
 }
 
+/// macOS 菜单栏：把源 SVG 的主体涂黑、字形与句点涂白、去掉高光，栅格化后按白色程度镂空，
+/// 得到「主体实心、字形透明」的单色蒙版。系统按菜单栏明暗自动着色。
+func writeMenuBarTemplate(to output: URL) throws {
+    var text = svgText
+    for (color, replacement) in [
+        ("fill=\"url(#body)\"", "fill=\"#000000\""),
+        ("stroke-opacity=\"0.12\"", "stroke-opacity=\"0\""),
+        ("fill=\"#9FA8DA\"", "fill=\"#FFFFFF\""),
+    ] {
+        guard text.contains(color) else { fatalError("AppIcon.svg 中找不到 \(color)") }
+        text = text.replacingOccurrences(of: color, with: replacement)
+    }
+    guard text.contains("fill=\"#F4F1E8\"") else { fatalError("AppIcon.svg 中找不到字形颜色") }
+    text = text.replacingOccurrences(of: "fill=\"#F4F1E8\"", with: "fill=\"#FFFFFF\"")
+    guard let mask = NSImage(data: Data(text.utf8)) else { fatalError("无法生成菜单栏蒙版") }
+
+    // 64px 供 16pt 菜单栏图标在 2x/3x 屏幕上缩放使用。
+    let rep = bitmap(mask, size: 64, region: body)
+    for y in 0..<rep.pixelsHigh {
+        for x in 0..<rep.pixelsWide {
+            let pixel = rep.colorAt(x: x, y: y)!.usingColorSpace(.deviceRGB)!
+            // 黑白之间的抗锯齿过渡按白色程度线性镂空。
+            let alpha = pixel.alphaComponent * (1 - pixel.redComponent)
+            rep.setColor(NSColor(deviceRed: 0, green: 0, blue: 0, alpha: alpha), atX: x, y: y)
+        }
+    }
+    try rep.representation(using: .png, properties: [:])!.write(to: output)
+}
+
 try writeICNS(to: root.appendingPathComponent("Resources/AppIcon.icns"))
 try writeICO(to: root.appendingPathComponent("windows/Sayso/Assets/Sayso.ico"))
-print("Rendered AppIcon.icns and Sayso.ico")
+try writeMenuBarTemplate(to: root.appendingPathComponent("Resources/MenuBarIcon.png"))
+print("Rendered AppIcon.icns, Sayso.ico and MenuBarIcon.png")

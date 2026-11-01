@@ -33,7 +33,7 @@ internal sealed partial class SettingsWindow : Window
     {
         this.core = core;
         this.platform = platform;
-        Title = "言出 Sayso";
+        Title = "Sayso";
         SystemBackdrop = new MicaBackdrop();
         ExtendsContentIntoTitleBar = true;
         var scale = NativeMethods.GetDpiForWindow(WinRT.Interop.WindowNative.GetWindowHandle(this)) / 96.0;

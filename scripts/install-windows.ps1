@@ -9,14 +9,14 @@ New-Item -ItemType Directory -Path $destination -Force | Out-Null
 Copy-Item -Path (Join-Path $sourcePath '*') -Destination $destination -Recurse -Force -Exclude 'smoke-results.json'
 Copy-Item -LiteralPath (Join-Path $PSScriptRoot 'uninstall-windows.ps1') -Destination $destination -Force
 $shell = New-Object -ComObject WScript.Shell
-$shortcut = $shell.CreateShortcut((Join-Path ([Environment]::GetFolderPath('Programs')) '言出 Sayso.lnk'))
+$shortcut = $shell.CreateShortcut((Join-Path ([Environment]::GetFolderPath('Programs')) 'Sayso.lnk'))
 $shortcut.TargetPath = Join-Path $destination 'Sayso.exe'
 $shortcut.WorkingDirectory = $destination
 $shortcut.IconLocation = Join-Path $destination 'Assets/Sayso.ico'
 $shortcut.Save()
 $uninstall = 'HKCU:/Software/Microsoft/Windows/CurrentVersion/Uninstall/Sayso'
 New-Item -Path $uninstall -Force | Out-Null
-New-ItemProperty -Path $uninstall -Name DisplayName -Value '言出 Sayso' -Force | Out-Null
+New-ItemProperty -Path $uninstall -Name DisplayName -Value 'Sayso' -Force | Out-Null
 $version = (Get-Item -LiteralPath (Join-Path $destination 'Sayso.exe')).VersionInfo.ProductVersion
 New-ItemProperty -Path $uninstall -Name DisplayVersion -Value $version -Force | Out-Null
 New-ItemProperty -Path $uninstall -Name InstallLocation -Value $destination -Force | Out-Null

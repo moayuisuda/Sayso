@@ -2,7 +2,7 @@ $ErrorActionPreference = 'Stop'
 $destination = [IO.Path]::GetFullPath((Join-Path $env:LOCALAPPDATA 'Programs/Sayso'))
 if ([IO.Path]::GetFullPath($PSScriptRoot) -ne $destination) { throw '请从已安装的 Sayso 目录运行卸载。' }
 if (Get-Process Sayso -ErrorAction SilentlyContinue | Where-Object { $_.Path -eq (Join-Path $destination 'Sayso.exe') }) { throw '请先从托盘退出 Sayso。' }
-$shortcut = Join-Path ([Environment]::GetFolderPath('Programs')) '言出 Sayso.lnk'
+$shortcut = Join-Path ([Environment]::GetFolderPath('Programs')) 'Sayso.lnk'
 if (Test-Path -LiteralPath $shortcut) { Remove-Item -LiteralPath $shortcut }
 foreach ($key in @('HKCU:/Software/Microsoft/Windows/CurrentVersion/Uninstall/Sayso', 'HKCU:/Software/Classes/Sayso.Extension')) {
     if (Test-Path -LiteralPath $key) { Remove-Item -LiteralPath $key -Recurse }

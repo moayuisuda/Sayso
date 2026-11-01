@@ -100,7 +100,7 @@ macOS 包只包含 Apple 芯片版本，用 Developer ID Application 证书签�
 
 ## 图标
 
-应用图标的唯一源文件是 [`Resources/AppIcon.svg`](../Resources/AppIcon.svg)，修改后运行以下命令重新生成 macOS `AppIcon.icns` 与 Windows `Sayso.ico`：
+应用图标的唯一源文件是 [`Resources/AppIcon.svg`](../Resources/AppIcon.svg)，修改后运行以下命令重新生成 macOS `AppIcon.icns`、菜单栏模板 `MenuBarIcon.png` 与 Windows `Sayso.ico`：
 
 ```bash
 swift scripts/render-icons.swift

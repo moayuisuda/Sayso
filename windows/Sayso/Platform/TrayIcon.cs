@@ -18,7 +18,7 @@ internal sealed class TrayIcon : IDisposable
             Size = (uint)System.Runtime.InteropServices.Marshal.SizeOf<NativeMethods.NotifyIconData>(),
             Window = window, Id = 1, Flags = 7, Callback = NativeMethods.TrayMessage,
             Icon = NativeMethods.LoadImage(0, Path.Combine(AppContext.BaseDirectory, "Assets", "Sayso.ico"), 1, 32, 32, 0x10),
-            Tip = "言出 Sayso", Info = "", InfoTitle = ""
+            Tip = "Sayso", Info = "", InfoTitle = ""
         };
         NativeMethods.SetWindowSubclass(window, callback, 1, 0);
         if (!NativeMethods.Shell_NotifyIcon(0, ref data)) throw new InvalidOperationException("无法创建系统托盘图标。");

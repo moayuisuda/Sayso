@@ -75,7 +75,7 @@ struct CandidateView: View {
         } else if isWorking {
             StatusLabel(L("处理中", "Working")) { ProgressView().controlSize(.mini) }
         } else if case .presenting = model.session {
-            StatusLabel(L("言出", "Sayso")) { IconTile(systemImage: "character.bubble", size: 18) }
+            StatusLabel("Sayso") { AppIconView(size: 18) }
         }
     }
 

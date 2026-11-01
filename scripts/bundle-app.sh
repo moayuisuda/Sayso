@@ -36,6 +36,7 @@ if [ -n "${VERSION:-}" ]; then
 fi
 # 图标由 scripts/render-icons.swift 从 Resources/AppIcon.svg 生成。
 cp "$PROJECT_DIR/Resources/AppIcon.icns" "$APP/Contents/Resources/AppIcon.icns"
+cp "$PROJECT_DIR/Resources/MenuBarIcon.png" "$APP/Contents/Resources/MenuBarIcon.png"
 
 SIGN_FLAGS=(--force --options runtime --entitlements "$PROJECT_DIR/Resources/Sayso.entitlements")
 if [ -n "$IDENTITY" ]; then

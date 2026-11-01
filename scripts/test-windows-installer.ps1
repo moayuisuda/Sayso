@@ -33,8 +33,12 @@ function Assert-Installed {
         throw '卸载入口与程序版本不一致。'
     }
     if ($registration.InstallLocation.TrimEnd('\') -ne $destination) { throw '安装位置注册错误。' }
-    $link = (New-Object -ComObject WScript.Shell).CreateShortcut($shortcut)
-    if ($link.TargetPath -ne $executable -or $link.WorkingDirectory -ne $destination) { throw '开始菜单快捷方式错误。' }
+    # WScript.Shell 的 WshShortcut 按 ANSI 代码页转换路径，非 ASCII 安装目录会被读成 '?'；Shell.Application 走 Unicode 接口。
+    $folder = (New-Object -ComObject Shell.Application).NameSpace((Split-Path $shortcut -Parent))
+    $link = $folder.ParseName((Split-Path $shortcut -Leaf)).GetLink
+    if ($link.Path -ne $executable -or $link.WorkingDirectory -ne $destination) {
+        throw "开始菜单快捷方式错误：目标 '$($link.Path)'，工作目录 '$($link.WorkingDirectory)'。"
+    }
     $command = (Get-Item -LiteralPath "$classKey/shell/open/command").GetValue('')
     if ($command -ne ('"' + $executable + '" "%1"')) { throw '扩展包打开命令错误。' }
     if ((Get-Item -LiteralPath "$association/OpenWithProgids").GetValue('Sayso.Extension', $null) -ne '') {

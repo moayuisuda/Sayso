@@ -96,7 +96,7 @@ pub struct Settings {
     pub enabled_extensions: Vec<String>,
 }
 
-/// 个人背景的长度上限（字符），取各识别服务上下文限制中最小的千问 400 字。
+/// 翻译背景的长度上限（字符），取各识别服务上下文限制中最小的千问 400 字。
 pub const USER_CONTEXT_LIMIT: usize = 400;
 
 pub const SPEECH_TRANSLATE_ID: &str = "sayso.dictation";
@@ -167,7 +167,7 @@ impl Settings {
         }
     }
 
-    /// 规整用户提交的设置：个人背景截断到长度上限；切换翻译服务时载入该服务的默认地址与模型；「直接」路由总是存在；
+    /// 规整用户提交的设置：翻译背景截断到长度上限；切换翻译服务时载入该服务的默认地址与模型；「直接」路由总是存在；
     /// 删除的路由键上的命令绑定随之移除，不再绑定命令的路由键随之删除。
     pub fn normalized(mut self, previous: &Settings) -> Self {
         self.user_context = self.user_context.chars().take(USER_CONTEXT_LIMIT).collect();

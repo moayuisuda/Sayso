@@ -1,5 +1,5 @@
 //! 真实服务回放检查：参数为识别服务（volcengine / qwen / soniox）、16 kHz 单声道 Int16 PCM 文件、目标/本地语言代码，
-//! 以及可选的个人背景；API Key 从标准输入读取。
+//! 以及可选的翻译背景；API Key 从标准输入读取。
 use sayso_core::asr::{AsrConfig, Recognition};
 use sayso_core::protocol::{Language, LanguagePair};
 use std::io::BufRead;

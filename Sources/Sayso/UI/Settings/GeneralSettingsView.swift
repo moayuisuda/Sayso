@@ -35,12 +35,12 @@ struct GeneralSettingsView: View {
                     }
                 }
                 SettingsRow(
-                    title: L("个人背景", "About you"),
+                    title: L("翻译背景", "Translation background"),
                     caption: L("提供给语音识别与翻译模型，让专业词汇更准确。写明你的身份或常说的领域即可。",
                                "Shared with the speech and translation models so domain terms come out right. Describe your role or the topics you usually talk about.")
                 ) {
                     TextField(
-                        L("个人背景", "About you"),
+                        L("翻译背景", "Translation background"),
                         text: model.binding(\.userContext),
                         prompt: Text(L("例如：我是软件工程师，常说编程与云服务术语", "e.g. I'm a software engineer and often use programming and cloud terms")),
                         axis: .vertical

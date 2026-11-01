@@ -55,7 +55,7 @@ internal sealed partial class SettingsWindow
             Controls.Section(L("语言", "Languages"),
                 Controls.Row(L("目标语言", "Target language"), SettingChoice("targetLanguage", Options(languages), enabled: value => Recognizes(SelectedAsrSource, value)), LanguageCaption()),
                 Controls.Row(L("本地语言", "Native language"), SettingChoice("nativeLanguage", Options(languages), true, value => Recognizes(SelectedAsrSource, value)), L("不会说的词直接用本地语言说，会自动翻译成目标语言。", "Say unfamiliar words in your native language to translate them in place.")),
-                Controls.Row(L("个人背景", "About you"), userContext, L("提供给语音识别与翻译模型，让专业词汇更准确。写明你的身份或常说的领域即可。", "Shared with the speech and translation models so domain terms come out right. Describe your role or the topics you usually talk about."))),
+                Controls.Row(L("翻译背景", "Translation background"), userContext, L("提供给语音识别与翻译模型，让专业词汇更准确。写明你的身份或常说的领域即可。", "Shared with the speech and translation models so domain terms come out right. Describe your role or the topics you usually talk about."))),
             Controls.Section(L("快捷键", "Shortcut"),
                 Controls.Row(L("开始输入", "Start input"), recorder, L("按住说话；期间按 T 切换为划词翻译。命令路由可在「扩展」中修改。", "Hold to speak; press T while holding to translate selected text. Edit routes in Extensions.")),
                 Controls.Row(L("触发方式", "Mode"), SettingChoice("hotkeyStyle", [("hold", L("按住说话", "Hold to talk")), ("toggle", L("按一下开始 / 结束", "Press to toggle"))]), L("录音或识别过程中按 Esc 取消。", "Press Esc to cancel recording or recognition."))),

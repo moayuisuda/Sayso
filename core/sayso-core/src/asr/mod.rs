@@ -31,7 +31,7 @@ const BATCH_FINISH_TIMEOUT: Duration = Duration::from_secs(60);
 
 /// 创建识别会话所需的全部参数，由选用的识别来源（见 [`source`]）在每次录音开始时生成。
 #[derive(Clone, Debug)]
-/// `context` 为用户的个人背景，空字符串表示不提供。
+/// `context` 为用户的翻译背景，空字符串表示不提供。
 pub enum AsrConfig {
     Volcengine { api_key: String, resource_id: String, context: String },
     Qwen { api_key: String, languages: LanguagePair, context: String },

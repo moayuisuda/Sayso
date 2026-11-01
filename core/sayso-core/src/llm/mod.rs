@@ -45,7 +45,7 @@ impl ReasoningLevel {
     }
 }
 
-/// 在扩展的系统提示词后附上用户的个人背景，让所有扩展的模型请求都据此理解专业词汇；背景为空时原样返回。
+/// 在扩展的系统提示词后附上用户的翻译背景，让所有扩展的模型请求都据此理解专业词汇；背景为空时原样返回。
 pub fn with_user_context(system: &str, context: &str) -> String {
     let context = context.trim();
     if context.is_empty() {

@@ -42,7 +42,7 @@ pub(super) async fn run(
         .file_name("audio.wav")
         .mime_str("audio/wav")
         .map_err(server_error)?;
-    // 不指定 language，改用提示词告知会出现两种语言，让模型保留原语言转写而不是翻译；个人背景帮助识别专业词汇。
+    // 不指定 language，改用提示词告知会出现两种语言，让模型保留原语言转写而不是翻译；翻译背景帮助识别专业词汇。
     let prompt = format!(
         "The speaker mixes {} and {}. Transcribe each word in the language it was spoken. {context}",
         languages.target.english_name(),

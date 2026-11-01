@@ -70,7 +70,7 @@ impl streaming::Wire for Wire {
                 "enable_nonstream": true,
             },
         });
-        // 个人背景作为对话上下文提供，协议要求序列化成 JSON 字符串。
+        // 翻译背景作为对话上下文提供，协议要求序列化成 JSON 字符串。
         if !self.context.is_empty() {
             let context = serde_json::json!({"context_type": "dialog_ctx", "context_data": [{"text": self.context}]});
             payload["request"]["corpus"] = serde_json::json!({ "context": context.to_string() });

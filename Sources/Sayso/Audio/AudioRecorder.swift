@@ -1,4 +1,5 @@
 @preconcurrency import AVFoundation
+import os
 
 enum AudioRecorderError: Error, LocalizedError {
     case microphoneDenied
@@ -23,6 +24,12 @@ final class AudioRecorder: @unchecked Sendable {
     private var pending = Data()
     private var onChunk: (@Sendable (Data) -> Void)?
     private var onLevel: (@Sendable (Float) -> Void)?
+    /// 本次录音的送出统计，停止时写入日志：用于排查实时文字中途停止时，麦克风数据是否也已中断。
+    private var startedAt = ContinuousClock.now
+    private var chunkCount = 0
+    private var lastChunkAt: ContinuousClock.Instant?
+    private var configurationObserver: NSObjectProtocol?
+    private let logger = Logger(subsystem: "com.sayso.app", category: "audio")
 
     func start(onChunk: @escaping @Sendable (Data) -> Void, onLevel: @escaping @Sendable (Float) -> Void) throws {
         guard AVCaptureDevice.authorizationStatus(for: .audio) == .authorized else {
@@ -38,6 +45,17 @@ final class AudioRecorder: @unchecked Sendable {
             pending = Data()
             self.onChunk = onChunk
             self.onLevel = onLevel
+            startedAt = .now
+            chunkCount = 0
+            lastChunkAt = nil
+        }
+        // 输入设备切换等会让系统停止引擎，之后不再有音频回调。
+        configurationObserver = NotificationCenter.default.addObserver(
+            forName: .AVAudioEngineConfigurationChange,
+            object: engine,
+            queue: nil
+        ) { [logger, engine] _ in
+            logger.error("audio engine configuration changed while recording, running=\(engine.isRunning)")
         }
         input.installTap(onBus: 0, bufferSize: 1_024, format: sourceFormat) { [weak self] buffer, _ in
             self?.process(buffer, converter: converter)
@@ -53,17 +71,21 @@ final class AudioRecorder: @unchecked Sendable {
 
     /// 停止录音并把不足一块的尾部数据一并交出。
     func stop() {
+        if let configurationObserver { NotificationCenter.default.removeObserver(configurationObserver) }
+        configurationObserver = nil
         engine.inputNode.removeTap(onBus: 0)
         engine.stop()
-        let (tail, callback) = lock.withLock { () -> (Data, (@Sendable (Data) -> Void)?) in
+        let (tail, callback, chunks, lastChunk, startedAt) = lock.withLock {
             defer {
                 pending = Data()
                 onChunk = nil
                 onLevel = nil
             }
-            return (pending, onChunk)
+            return (pending, onChunk, chunkCount, lastChunkAt, self.startedAt)
         }
         if !tail.isEmpty { callback?(tail) }
+        let silentFor = lastChunk.map { "\(ContinuousClock.now - $0)" } ?? "-"
+        logger.notice("audio stopped after \(ContinuousClock.now - startedAt, privacy: .public): chunks=\(chunks) lastChunkAgo=\(silentFor, privacy: .public)")
     }
 
     private func process(_ buffer: AVAudioPCMBuffer, converter: AVAudioConverter) {
@@ -91,6 +113,10 @@ final class AudioRecorder: @unchecked Sendable {
             while pending.count >= Self.chunkByteSize {
                 chunks.append(pending.prefix(Self.chunkByteSize))
                 pending.removeFirst(Self.chunkByteSize)
+            }
+            if !chunks.isEmpty {
+                chunkCount += chunks.count
+                lastChunkAt = .now
             }
             return (chunks, onChunk, onLevel)
         }

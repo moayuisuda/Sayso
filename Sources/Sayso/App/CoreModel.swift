@@ -229,7 +229,8 @@ private final class UnifiedLogSink: LogSink {
         switch level {
         case .error: logger.error("[\(target, privacy: .public)] \(message, privacy: .public)")
         case .warn: logger.warning("[\(target, privacy: .public)] \(message, privacy: .public)")
-        case .info: logger.info("[\(target, privacy: .public)] \(message, privacy: .public)")
+        // Info 写入默认级别（notice）：统一日志只把默认级别及以上落盘，info 级别只在内存中短暂保留，事后无法排查。
+        case .info: logger.notice("[\(target, privacy: .public)] \(message, privacy: .public)")
         case .debug: logger.debug("[\(target, privacy: .public)] \(message, privacy: .public)")
         }
     }

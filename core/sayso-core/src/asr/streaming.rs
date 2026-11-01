@@ -1,5 +1,7 @@
 //! 基于 WebSocket 的流式识别会话。各服务的线上协议由 [`Wire`] 适配。
 
+use std::time::Instant;
+
 use futures_util::{SinkExt, StreamExt};
 use tokio::sync::mpsc;
 use tokio_tungstenite::tungstenite::client::IntoClientRequest;
@@ -40,15 +42,72 @@ pub(super) fn request(url: &str) -> Result<Request, CoreError> {
     url.into_client_request().map_err(server_error)
 }
 
+/// 一次流式识别的收发统计，随识别任务释放时写入日志：正常结束、出错、取消或超时中止都会记录，
+/// 用于排查实时文字中途停止更新时，是音频没再送达、服务端没再回复，还是连接卡住。
+struct Trace {
+    started: Instant,
+    connected: Option<Instant>,
+    audio_chunks: usize,
+    audio_ended: Option<Instant>,
+    messages: usize,
+    partials: usize,
+    last_message: Option<Instant>,
+}
+
+impl Trace {
+    fn new() -> Self {
+        Trace {
+            started: Instant::now(),
+            connected: None,
+            audio_chunks: 0,
+            audio_ended: None,
+            messages: 0,
+            partials: 0,
+            last_message: None,
+        }
+    }
+}
+
+impl Drop for Trace {
+    fn drop(&mut self) {
+        let ms = |at: Option<Instant>| at.map_or("-".to_string(), |at| (at - self.started).as_millis().to_string());
+        log::info!(
+            "streaming recognition closed after {}ms: connected={}ms audio_chunks={} audio_ended={}ms messages={} partials={} last_message={}ms",
+            self.started.elapsed().as_millis(),
+            ms(self.connected),
+            self.audio_chunks,
+            ms(self.audio_ended),
+            self.messages,
+            self.partials,
+            ms(self.last_message),
+        );
+    }
+}
+
 /// 连接服务，按序发送音频；音频通道关闭后发送结束帧，等待最终结果。
 pub(super) async fn run(
+    wire: impl Wire,
+    audio: mpsc::UnboundedReceiver<Vec<u8>>,
+    partial: PartialSink,
+) -> Result<String, CoreError> {
+    let mut trace = Trace::new();
+    let outcome = exchange(wire, audio, partial, &mut trace).await;
+    if let Err(error) = &outcome {
+        log::error!("streaming recognition failed: {error}");
+    }
+    outcome
+}
+
+async fn exchange(
     mut wire: impl Wire,
     mut audio: mpsc::UnboundedReceiver<Vec<u8>>,
     partial: PartialSink,
+    trace: &mut Trace,
 ) -> Result<String, CoreError> {
     // 关闭 Nagle：每 100ms 一帧音频的尾段不能被攒包延迟，否则实时字幕明显滞后。
     let (socket, _) =
         tokio_tungstenite::connect_async_with_config(wire.request()?, None, true).await.map_err(server_error)?;
+    trace.connected = Some(Instant::now());
     let (mut sink, mut stream) = socket.split();
     sink.send(wire.opening_message()?).await.map_err(server_error)?;
     let ready_deadline = tokio::time::Instant::now() + std::time::Duration::from_secs(10);
@@ -59,9 +118,13 @@ pub(super) async fn run(
             _ = tokio::time::sleep_until(ready_deadline), if !wire.is_ready() => return Err(server_error("recognition task did not start within 10 seconds")),
             chunk = audio.recv(), if audio_open && wire.is_ready() => {
                 let messages = match chunk {
-                    Some(pcm) => vec![wire.audio_message(pcm)],
+                    Some(pcm) => {
+                        trace.audio_chunks += 1;
+                        vec![wire.audio_message(pcm)]
+                    }
                     None => {
                         audio_open = false;
+                        trace.audio_ended = Some(Instant::now());
                         wire.end_of_audio_messages()
                     }
                 };
@@ -69,18 +132,27 @@ pub(super) async fn run(
                     sink.send(message).await.map_err(server_error)?;
                 }
             }
-            message = stream.next() => match message {
-                Some(Ok(Message::Close(_))) if !audio_open => return wire.finish_on_close(),
-                Some(Ok(message)) => match wire.receive(message)? {
-                    Update::None => {}
-                    Update::Partial(text) => partial(text),
-                    Update::Finished(text) => return Ok(text),
-                },
-                // 已请求结束后服务端直接断开，视为正常结束。
-                Some(Err(_)) | None if !audio_open => return wire.finish_on_close(),
-                Some(Err(error)) => return Err(server_error(error)),
-                None => return Err(server_error("connection closed")),
-            },
+            message = stream.next() => {
+                if let Some(Ok(_)) = &message {
+                    trace.messages += 1;
+                    trace.last_message = Some(Instant::now());
+                }
+                match message {
+                    Some(Ok(Message::Close(_))) if !audio_open => return wire.finish_on_close(),
+                    Some(Ok(message)) => match wire.receive(message)? {
+                        Update::None => {}
+                        Update::Partial(text) => {
+                            trace.partials += 1;
+                            partial(text);
+                        }
+                        Update::Finished(text) => return Ok(text),
+                    },
+                    // 已请求结束后服务端直接断开，视为正常结束。
+                    Some(Err(_)) | None if !audio_open => return wire.finish_on_close(),
+                    Some(Err(error)) => return Err(server_error(error)),
+                    None => return Err(server_error("connection closed")),
+                }
+            }
         }
     }
 }

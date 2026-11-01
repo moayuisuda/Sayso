@@ -1,5 +1,6 @@
 import AppKit
 import Carbon.HIToolbox
+import os
 import SaysoCore
 
 /// 全局热键监听（CGEventTap，需要辅助功能权限）。
@@ -52,6 +53,10 @@ final class HotkeyMonitor {
     /// 已吞掉按下事件的路由键，松开时一并吞掉。
     private var swallowedKeys: Set<UInt16> = []
     private var armTask: Task<Void, Never>?
+    /// 只记录入口键、Esc 与监听状态，不记录其他按键内容。
+    private let logger = Logger(subsystem: "com.sayso.app", category: "hotkey")
+    /// 交给 core 的操作在主线程同步执行，超过此时长会拖住事件监听，记录下来以便排查。
+    private let slowActionThreshold: Duration = .milliseconds(200)
 
     var isRunning: Bool { tap != nil }
 
@@ -80,6 +85,8 @@ final class HotkeyMonitor {
     /// 返回 nil 表示吞掉事件。
     fileprivate func handle(type: CGEventType, event: CGEvent) -> Unmanaged<CGEvent>? {
         if type == .tapDisabledByTimeout || type == .tapDisabledByUserInput {
+            // 被禁用期间的按键（如松开入口键、Esc）不会再送达，状态可能停在按住中。
+            logger.error("event tap disabled by \(type == .tapDisabledByTimeout ? "timeout" : "user input", privacy: .public), triggerHeld=\(self.isTriggerHeld)")
             if let tap { CGEvent.tapEnable(tap: tap, enable: true) }
             return Unmanaged.passUnretained(event)
         }
@@ -91,9 +98,13 @@ final class HotkeyMonitor {
         case .flagsChanged:
             handleFlagsChanged(keyCode: keyCode, flags: event.flags)
         case .keyDown:
-            if keyCode == UInt16(kVK_Escape), isSessionActive() {
-                onAction(.cancel)
-                return nil
+            if keyCode == UInt16(kVK_Escape) {
+                let active = isSessionActive()
+                logger.notice("escape sessionActive=\(active)")
+                if active {
+                    perform(.cancel)
+                    return nil
+                }
             }
             // 组合键入口：按下即按住。
             if !trigger.isModifierOnly, !isTriggerHeld, keyCode == trigger.keyCode,
@@ -105,7 +116,7 @@ final class HotkeyMonitor {
             if !isRepeat, !isTriggerHeld, (keyCode == UInt16(kVK_Return) || keyCode == UInt16(kVK_ANSI_KeypadEnter)),
                event.flags.intersection(Hotkey.standardModifierMask).isEmpty,
                let surface = candidateSurface(TimeInterval(event.timestamp) / 1_000_000_000) {
-                onAction(.dismiss(surface))
+                perform(.dismiss(surface))
             }
             guard isTriggerHeld else { break }
             if keyCode == trigger.keyCode { return nil }  // 组合键入口的自动重复
@@ -143,6 +154,7 @@ final class HotkeyMonitor {
     }
 
     private func triggerDown(interrupted: Bool) {
+        logger.notice("trigger down interrupted=\(interrupted)")
         isTriggerHeld = true
         triggerDownAt = .now
         self.interrupted = interrupted
@@ -163,20 +175,22 @@ final class HotkeyMonitor {
     }
 
     private func triggerUp() {
+        logger.notice("trigger up routed=\(self.routed) interrupted=\(self.interrupted)")
         isTriggerHeld = false
         armTask?.cancel()
         switch style {
         case .hold:
-            if routed { onAction(.stop) }
+            if routed { perform(.stop) }
         case .toggle:
             guard !interrupted, !pressedRoutes.isEmpty || ContinuousClock.now - triggerDownAt < tapThreshold else { return }
-            onAction(.toggle(pressedRoutes.isEmpty ? [.direct] : pressedRoutes))
+            perform(.toggle(pressedRoutes.isEmpty ? [.direct] : pressedRoutes))
         }
     }
 
     /// 已触发后（如录音中按了 ⌘C）不再算作打断，按键照常放行。
     private func interrupt() {
         guard !routed else { return }
+        logger.notice("trigger interrupted by another key")
         interrupted = true
         armTask?.cancel()
     }
@@ -192,7 +206,17 @@ final class HotkeyMonitor {
 
     private func send(_ route: RouteKey) {
         routed = true
-        onAction(.route(route))
+        perform(.route(route))
+    }
+
+    /// 交给 core 执行，并记录阻塞主线程过久的调用。
+    private func perform(_ action: Action) {
+        let start = ContinuousClock.now
+        onAction(action)
+        let elapsed = ContinuousClock.now - start
+        if elapsed > slowActionThreshold {
+            logger.error("action \(String(describing: action), privacy: .public) blocked the main thread for \(elapsed, privacy: .public)")
+        }
     }
 }
 

@@ -57,6 +57,18 @@ pub(crate) enum Phase {
     Presenting(Surface),
 }
 
+impl Phase {
+    /// 日志中的阶段名。
+    fn label(&self) -> &'static str {
+        match self {
+            Phase::Idle => "idle",
+            Phase::Recording { .. } => "recording",
+            Phase::Processing { .. } => "processing",
+            Phase::Presenting(_) => "presenting",
+        }
+    }
+}
+
 #[derive(Default)]
 pub(crate) struct Session {
     pub(crate) phase: Phase,
@@ -117,6 +129,7 @@ impl Inner {
             return;
         }
         self.update_session(|session| {
+            log::info!("trigger {key:?} input={:?} phase={}", route.input, session.phase.label());
             if !settings.languages().is_valid() {
                 return self.present_failure(
                     session,
@@ -158,9 +171,13 @@ impl Inner {
     /// 结束录音，等待识别结果后交给命令。
     pub(crate) fn stop(self: &Arc<Self>) {
         let finishing = self.update_session(|session| {
+            log::info!("stop phase={} generation={}", session.phase.label(), session.generation);
             let Phase::Recording { partial } = &session.phase else { return None };
             let message = partial.clone();
-            let recognition = session.recognition.take()?;
+            let Some(recognition) = session.recognition.take() else {
+                log::error!("stop while recording without a recognition");
+                return None;
+            };
             self.stop_audio();
             session.phase = Phase::Processing { message };
             Some((recognition, session.generation))
@@ -169,8 +186,13 @@ impl Inner {
         let inner = self.clone();
         self.runtime.spawn(async move {
             let outcome = recognition.finish().await;
+            match &outcome {
+                Ok(transcript) => log::info!("recognition {generation} finished, {} chars", transcript.chars().count()),
+                Err(error) => log::error!("recognition {generation} failed: {error}"),
+            }
             let input = inner.update_session(|session| {
                 if session.generation != generation {
+                    log::info!("recognition {generation} result dropped, session moved to {}", session.generation);
                     return None;
                 }
                 match outcome {
@@ -198,6 +220,7 @@ impl Inner {
 
     pub(crate) fn cancel(&self) {
         self.update_session(|session| {
+            log::info!("cancel phase={} generation={}", session.phase.label(), session.generation);
             if session.is_active() {
                 self.cancel_flow(session);
             }
@@ -287,6 +310,7 @@ impl Inner {
         }
         session.recognition = Some(recognition);
         session.phase = Phase::Recording { partial: String::new() };
+        log::info!("recording {generation} started");
         self.warm_up_translation();
     }
 

@@ -4,17 +4,20 @@ $ErrorActionPreference = 'Stop'
 $repo = Split-Path $PSScriptRoot -Parent
 $source = Join-Path $repo 'build/windows'
 if (-not $Compiler) {
-    $command = Get-Command ISCC.exe -ErrorAction SilentlyContinue
-    $Compiler = if ($command) { $command.Source } else {
-        $installation = Get-ItemProperty -Path @(
-            'HKCU:/Software/Microsoft/Windows/CurrentVersion/Uninstall/Inno Setup 7_is1',
-            'HKLM:/Software/Microsoft/Windows/CurrentVersion/Uninstall/Inno Setup 7_is1',
-            'HKLM:/Software/WOW6432Node/Microsoft/Windows/CurrentVersion/Uninstall/Inno Setup 7_is1'
-        ) -ErrorAction SilentlyContinue | Select-Object -First 1
-        if ($installation) { Join-Path $installation.InstallLocation 'ISCC.exe' }
+    # 先按 Inno Setup 7 的安装注册表定位：PATH 上可能是机器预装的旧版本（如 CI 镜像自带的 Inno Setup 6）。
+    $installation = Get-ItemProperty -Path @(
+        'HKCU:/Software/Microsoft/Windows/CurrentVersion/Uninstall/Inno Setup 7_is1',
+        'HKLM:/Software/Microsoft/Windows/CurrentVersion/Uninstall/Inno Setup 7_is1',
+        'HKLM:/Software/WOW6432Node/Microsoft/Windows/CurrentVersion/Uninstall/Inno Setup 7_is1'
+    ) -ErrorAction SilentlyContinue | Select-Object -First 1
+    $Compiler = if ($installation) { Join-Path $installation.InstallLocation 'ISCC.exe' } else {
+        (Get-Command ISCC.exe -ErrorAction SilentlyContinue).Source
     }
 }
 if (-not $Compiler) { throw '请安装 Inno Setup 7，或通过 -Compiler 指定 ISCC.exe。' }
+# 安装脚本依赖 Inno Setup 7 自带的简体中文语言文件，旧版本会在编译中途失败。
+$compilerVersion = (Get-Item -LiteralPath $Compiler).VersionInfo.FileMajorPart
+if ($compilerVersion -lt 7) { throw "需要 Inno Setup 7，当前 $Compiler 为 $compilerVersion.x。" }
 foreach ($file in @('Sayso.exe', 'sayso_windows_bridge.dll')) {
     if (-not (Test-Path -LiteralPath (Join-Path $source $file))) { throw "缺少 $file，请先构建 Windows 客户端。" }
 }

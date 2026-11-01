@@ -21,7 +21,7 @@ let package = Package(
             dependencies: ["SaysoCoreFFI"],
             path: "Sources/SaysoCore",
             swiftSettings: swiftSettings,
-            linkerSettings: [.linkedFramework("Security"), .linkedFramework("CoreFoundation"), .linkedLibrary("iconv")]
+            linkerSettings: [.linkedFramework("Security"), .linkedFramework("CoreFoundation"), .linkedFramework("SystemConfiguration"), .linkedLibrary("iconv")]
         ),
         // macOS 宿主：平台适配层（录音、选区、写入、热键、朗读）与 SwiftUI 界面。
         .executableTarget(

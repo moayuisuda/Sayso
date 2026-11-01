@@ -67,10 +67,12 @@ struct CandidateView: View {
     @ViewBuilder
     private var status: some View {
         if case .recording(_, let commands) = model.session {
+            // 图标保持静态，录音中的动态只由流光承担（见 FlowingBorder）。窗口图层树内持续播放的动画
+            // （如 symbolEffect）会让每帧提交同步等待窗口服务器，主队列长期得不到调度，
+            // core 推送的会话状态随之积压，候选框卡在录音画面且无法关闭。
             StatusLabel(([L("正在聆听", "Listening")] + commands).joined(separator: " · ")) {
                 Image(systemName: "waveform")
                     .foregroundStyle(Theme.accentForeground)
-                    .symbolEffect(.variableColor.iterative)
             }
         } else if isWorking {
             StatusLabel(L("处理中", "Working")) { ProgressView().controlSize(.mini) }

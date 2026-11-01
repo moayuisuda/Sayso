@@ -99,6 +99,16 @@ final class CoreModel {
         core.asrSources()
     }
 
+    /// 当前选用的识别来源；来源不可用时为 nil。
+    var selectedAsrSource: AsrSource? {
+        asrSources.first { $0.id == settings.asrSource }
+    }
+
+    /// 来源能否识别当前的目标语言与本地语言。
+    func supportsLanguages(_ source: AsrSource) -> Bool {
+        source.languages.contains(settings.targetLanguage) && source.languages.contains(settings.nativeLanguage)
+    }
+
     var languagesAreValid: Bool { settings.targetLanguage != settings.nativeLanguage }
 
     // MARK: 扩展与命令

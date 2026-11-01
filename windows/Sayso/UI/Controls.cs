@@ -91,10 +91,11 @@ internal static class Controls
         button.Click += (_, _) => action();
         return button;
     }
-    public static ComboBox Choice(IEnumerable<(string Value, string Title)> options, string selected, Action<string> changed)
+    /// `enabled` 为 false 的选项显示但不可选。
+    public static ComboBox Choice(IEnumerable<(string Value, string Title)> options, string selected, Action<string> changed, Func<string, bool>? enabled = null)
     {
         var combo = new ComboBox { MinWidth = 170, MaxWidth = 300, HorizontalAlignment = HorizontalAlignment.Left, FontSize = 13 };
-        foreach (var (value, title) in options) combo.Items.Add(new ComboBoxItem { Tag = value, Content = title });
+        foreach (var (value, title) in options) combo.Items.Add(new ComboBoxItem { Tag = value, Content = title, IsEnabled = enabled?.Invoke(value) ?? true });
         combo.SelectedItem = combo.Items.Cast<ComboBoxItem>().FirstOrDefault(i => (string)i.Tag == selected);
         combo.SelectionChanged += (_, _) => { if (combo.SelectedItem is ComboBoxItem item) changed((string)item.Tag); };
         return combo;

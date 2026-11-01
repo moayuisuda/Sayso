@@ -7,14 +7,17 @@ struct RecognitionSettingsView: View {
 
     var body: some View {
         let sources = model.asrSources
-        let selected = sources.first { $0.id == model.settings.asrSource }
+        let selected = model.selectedAsrSource
         SettingsSection(L("语音模型", "Speech model")) {
             SettingsRow(
                 title: L("识别服务", "Service"),
                 caption: selected?.caption
             ) {
                 Picker(L("识别服务", "Service"), selection: model.binding(\.asrSource)) {
-                    ForEach(sources, id: \.id) { Text($0.title).tag($0.id) }
+                    // 不能识别当前语言的来源不可选，需先在通用页改语言。
+                    ForEach(sources, id: \.id) { source in
+                        Text(source.title).tag(source.id).disabled(!model.supportsLanguages(source))
+                    }
                     // 来源不可用时提示重新选择服务。
                     if selected == nil {
                         Text(L("不可用的服务", "Unavailable service")).tag(model.settings.asrSource)

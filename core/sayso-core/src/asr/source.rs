@@ -7,6 +7,7 @@ use std::collections::HashMap;
 
 use super::AsrConfig;
 use crate::l10n::tr;
+use crate::protocol::Language;
 use crate::settings::{SecretSlot, Secrets, Settings};
 
 /// 识别服务的稳定 id。
@@ -27,6 +28,8 @@ pub struct AsrSource {
     pub title: String,
     /// 来源说明，如支持哪些语言混说。
     pub caption: Option<String>,
+    /// 能识别的语言。设置界面据此限制可选的目标语言与本地语言。
+    pub languages: Vec<Language>,
     pub fields: Vec<AsrField>,
     /// 获取 API Key 等的外部链接。
     pub link: Option<AsrLink>,
@@ -110,6 +113,7 @@ impl Service {
                     "只支持中文、英文与方言混说，不支持日语等其他语言。",
                     "Mixes Chinese, English and Chinese dialects only; other languages such as Japanese are not recognized.",
                 )),
+                languages: vec![Language::Chinese, Language::English],
                 fields: vec![
                     api_key,
                     AsrField {
@@ -144,6 +148,7 @@ impl Service {
                     "面向短句语音输入，按目标语言与本地语言提供识别提示；临时文字可能修订，最终结果确认后再翻译。",
                     "Short-form voice input with target and native language hints. Interim text may change; translation waits for the final transcript.",
                 )),
+                languages: Language::ALL.to_vec(),
                 fields: vec![api_key],
                 link: link(
                     tr("在百炼控制台获取 API Key", "Get an API key in the Model Studio console"),
@@ -157,6 +162,7 @@ impl Service {
                     "支持目标语言与本地语言在一句话内混说。",
                     "Your target and native languages can be mixed in one sentence.",
                 )),
+                languages: Language::ALL.to_vec(),
                 fields: vec![api_key],
                 link: link(get_key(), "https://console.soniox.com"),
             },
@@ -167,6 +173,7 @@ impl Service {
                     "本地模型请先独立启动服务，再填写支持 /audio/transcriptions 的 Base URL；录音结束后上传识别。",
                     "Start your local service separately, then enter its Base URL supporting /audio/transcriptions. Audio is uploaded after recording.",
                 )),
+                languages: Language::ALL.to_vec(),
                 fields: vec![
                     AsrField {
                         required: false,

@@ -16,6 +16,11 @@ struct GeneralSettingsView: View {
             SettingsSection(L("语言", "Languages")) {
                 SettingsRow(title: L("目标语言", "Target language"), caption: L("正在学习的语言", "The language you are learning")) {
                     languagePicker(model.binding(\.targetLanguage))
+                    if let restriction {
+                        Text(restriction)
+                            .font(.system(size: 12))
+                            .foregroundStyle(.secondary)
+                    }
                 }
                 SettingsRow(
                     title: L("本地语言", "Native language"),
@@ -104,9 +109,24 @@ struct GeneralSettingsView: View {
         }
     }
 
+    /// 所选识别来源能识别的语言；来源不可用时不限制。
+    private var recognizable: [Language] {
+        model.selectedAsrSource?.languages ?? supportedLanguages().map(\.language)
+    }
+
+    /// 识别来源只支持部分语言时，提示可选范围。
+    private var restriction: String? {
+        guard let source = model.selectedAsrSource, source.languages.count < supportedLanguages().count else { return nil }
+        let names = supportedLanguages().filter { source.languages.contains($0.language) }.map(\.nativeName).joined(separator: "、")
+        return L("语音模型「\(source.title)」只支持：\(names)", "Speech model \"\(source.title)\" only supports: \(names)")
+    }
+
+    /// 识别来源不支持的语言不可选。
     private func languagePicker(_ selection: Binding<Language>) -> some View {
         Picker("", selection: selection) {
-            ForEach(supportedLanguages(), id: \.language) { Text($0.nativeName).tag($0.language) }
+            ForEach(supportedLanguages(), id: \.language) { info in
+                Text(info.nativeName).tag(info.language).disabled(!recognizable.contains(info.language))
+            }
         }
         .labelsHidden()
         .fixedSize()

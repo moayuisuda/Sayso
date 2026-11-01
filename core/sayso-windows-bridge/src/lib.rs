@@ -181,7 +181,7 @@ impl Bridge {
             "hover" => { core.set_hovering(decode(args)?); Ok(Value::Null) }
             "languages" => Ok(json!(Language::ALL.map(|l| json!({"value":l,"title":l.native_name()})))),
             "providers" => Ok(json!(sayso_core::llm::LlmProvider::ALL.map(|p| json!({"value":p,"title":p.display_name(),"requiresKey":p.requires_api_key()})))),
-            "asrSources" => Ok(json!(core.asr_sources().into_iter().map(|s| json!({"id":s.id,"title":s.title,"caption":s.caption,
+            "asrSources" => Ok(json!(core.asr_sources().into_iter().map(|s| json!({"id":s.id,"title":s.title,"caption":s.caption,"languages":s.languages,
                 "link":s.link.map(|l|json!({"title":l.title,"url":l.url})),
                 "fields":s.fields.into_iter().map(|f| {
                     let (kind, options) = match f.kind {

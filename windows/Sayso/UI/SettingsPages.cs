@@ -9,8 +9,24 @@ namespace Sayso.UI;
 internal sealed partial class SettingsWindow
 {
     private IEnumerable<(string Value, string Title)> Options(JsonArray items) => items.Select(i => (i!["value"]!.GetValue<string>(), i["title"]!.GetValue<string>()));
-    private ComboBox SettingChoice(string field, IEnumerable<(string Value, string Title)> choices, bool redraw = false) =>
-        Controls.Choice(choices, Settings[field]!.GetValue<string>(), value => Run(async () => { await Save(field, JsonValue.Create(value)); if (redraw) { BuildTabs(); await Navigate(selected); } }));
+    private ComboBox SettingChoice(string field, IEnumerable<(string Value, string Title)> choices, bool redraw = false, Func<string, bool>? enabled = null) =>
+        Controls.Choice(choices, Settings[field]!.GetValue<string>(), value => Run(async () => { await Save(field, JsonValue.Create(value)); if (redraw) { BuildTabs(); await Navigate(selected); } }), enabled);
+
+    /// 当前选用的识别来源；来源不可用时为 null。
+    private JsonNode? SelectedAsrSource => asrSources.FirstOrDefault(s => s!["id"]!.GetValue<string>() == Settings["asrSource"]!.GetValue<string>());
+    /// 来源不可用时不限制语言。
+    private static bool Recognizes(JsonNode? source, string language) => source is null || source["languages"]!.AsArray().Any(l => l!.GetValue<string>() == language);
+    /// 来源能否识别当前的目标语言与本地语言。
+    private bool SupportsLanguages(JsonNode source) => Recognizes(source, Settings["targetLanguage"]!.GetValue<string>()) && Recognizes(source, Settings["nativeLanguage"]!.GetValue<string>());
+
+    /// 识别来源只支持部分语言时，提示可选范围。
+    private string LanguageCaption()
+    {
+        var caption = L("正在学习的语言", "The language you are learning");
+        if (SelectedAsrSource is not { } source || source["languages"]!.AsArray().Count >= languages.Count) return caption;
+        var names = string.Join(L("、", ", "), languages.Where(l => Recognizes(source, l!["value"]!.GetValue<string>())).Select(l => l!["title"]!.GetValue<string>()));
+        return caption + L($"。语音模型「{source["title"]!.GetValue<string>()}」只支持：{names}", $". Speech model \"{source["title"]!.GetValue<string>()}\" only supports: {names}");
+    }
     private TextBox SettingField(string field) => Controls.Field(Settings[field]!.GetValue<string>(), value => Run(() => Save(field, JsonValue.Create(value))));
 
     private UIElement GeneralPage()
@@ -34,8 +50,8 @@ internal sealed partial class SettingsWindow
         rate.ValueChanged += (_, _) => Run(() => Save("speechRate", JsonValue.Create(rate.Value)));
         return Controls.Page(
             Controls.Section(L("语言", "Languages"),
-                Controls.Row(L("目标语言", "Target language"), SettingChoice("targetLanguage", Options(languages)), L("正在学习的语言", "The language you are learning")),
-                Controls.Row(L("本地语言", "Native language"), SettingChoice("nativeLanguage", Options(languages), true), L("不会说的词直接用本地语言说，会自动翻译成目标语言。", "Say unfamiliar words in your native language to translate them in place."))),
+                Controls.Row(L("目标语言", "Target language"), SettingChoice("targetLanguage", Options(languages), enabled: value => Recognizes(SelectedAsrSource, value)), LanguageCaption()),
+                Controls.Row(L("本地语言", "Native language"), SettingChoice("nativeLanguage", Options(languages), true, value => Recognizes(SelectedAsrSource, value)), L("不会说的词直接用本地语言说，会自动翻译成目标语言。", "Say unfamiliar words in your native language to translate them in place."))),
             Controls.Section(L("快捷键", "Shortcut"),
                 Controls.Row(L("开始输入", "Start input"), recorder, L("按住说话；期间按 T 切换为划词翻译。命令路由可在「扩展」中修改。", "Hold to speak; press T while holding to translate selected text. Edit routes in Extensions.")),
                 Controls.Row(L("触发方式", "Mode"), SettingChoice("hotkeyStyle", [("hold", L("按住说话", "Hold to talk")), ("toggle", L("按一下开始 / 结束", "Press to toggle"))]), L("录音或识别过程中按 Esc 取消。", "Press Esc to cancel recording or recognition."))),
@@ -54,20 +70,21 @@ internal sealed partial class SettingsWindow
 
     private async Task<UIElement> SpeechModelSection()
     {
-        var sources = (await core!.Call("asrSources"))!.AsArray();
         var sourceId = Settings["asrSource"]!.GetValue<string>();
-        var source = sources.FirstOrDefault(s => s!["id"]!.GetValue<string>() == sourceId);
+        var source = SelectedAsrSource;
         var rows = new List<UIElement>
         {
-            Controls.Row(L("服务", "Service"), Controls.Choice(sources.Select(s => (s!["id"]!.GetValue<string>(), s["title"]!.GetValue<string>())), sourceId,
-                value => Run(async () => { await Save("asrSource", JsonValue.Create(value)); await Navigate("models"); })), source?["caption"]?.GetValue<string>())
+            Controls.Row(L("服务", "Service"), Controls.Choice(asrSources.Select(s => (s!["id"]!.GetValue<string>(), s["title"]!.GetValue<string>())), sourceId,
+                value => Run(async () => { await Save("asrSource", JsonValue.Create(value)); await Navigate("models"); }),
+                // 不能识别当前语言的来源不可选，需先在通用页改语言。
+                value => SupportsLanguages(asrSources.First(s => s!["id"]!.GetValue<string>() == value)!)), source?["caption"]?.GetValue<string>())
         };
         if (source is not null)
         {
             foreach (var field in source["fields"]!.AsArray())
             {
                 var fieldKey = field!["key"]!.GetValue<string>();
-                var value = (await core.Call("asrValue", new JsonObject { ["source"] = sourceId, ["field"] = fieldKey }))!.GetValue<string>();
+                var value = (await core!.Call("asrValue", new JsonObject { ["source"] = sourceId, ["field"] = fieldKey }))!.GetValue<string>();
                 void Set(string changed) => Run(() => core.Call("setAsrValue", new JsonObject { ["source"] = sourceId, ["field"] = fieldKey, ["value"] = changed }));
                 UIElement control = field["kind"]!.GetValue<string>() switch
                 {

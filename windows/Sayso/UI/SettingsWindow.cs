@@ -21,6 +21,7 @@ internal sealed partial class SettingsWindow : Window
     private readonly TextBlock status = Controls.Text("", 11, 0.6);
     private JsonArray extensions = [];
     private JsonArray languages = [];
+    private JsonArray asrSources = [];
     private JsonArray providers = [];
     internal JsonNode Settings { get; private set; } = null!;
     internal HotkeyMonitor? Hotkeys { get; set; }
@@ -103,6 +104,7 @@ internal sealed partial class SettingsWindow : Window
     {
         Settings = (await core!.Call("settings"))!;
         languages = (await core.Call("languages"))!.AsArray();
+        asrSources = (await core.Call("asrSources"))!.AsArray();
         providers = (await core.Call("providers"))!.AsArray();
         extensions = (await core.Call("extensions"))!.AsArray();
         Hotkeys!.Settings = Settings;
@@ -121,7 +123,9 @@ internal sealed partial class SettingsWindow : Window
         UpdateStatus();
         if (previousLanguage != Settings["nativeLanguage"]!.GetValue<string>())
         {
+            // 扩展与识别来源的文案随本地语言变化。
             extensions = (await core.Call("extensions"))!.AsArray();
+            asrSources = (await core.Call("asrSources"))!.AsArray();
             BuildTabs();
             await Navigate(selected);
         }

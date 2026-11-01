@@ -2,7 +2,7 @@
 
 <img src="Resources/AppIcon.svg" width="144" alt="Sayso">
 
-# 言出 Sayso
+# Sayso 言出
 
 **说你正在学的语言，卡住的词用母语补上。**
 
@@ -16,7 +16,7 @@
 
 [特点](#特点) · [使用](#使用) · [架构](#架构) · [扩展](#扩展) · [安装](#安装)
 
-<img src="docs/images/dictation.gif" width="560" alt="按住右 Option 说「The product is awesome but I want 更进一步」，Sayso 写入 to take it a step further">
+<img src="docs/images/dictation.gif" width="720" alt="在文本编辑中按住右 Option 说「This product is awesome, but I want 更进一步」，Sayso 写入「This product is awesome, but I want to go a step further.」">
 
 </div>
 

@@ -179,8 +179,13 @@ impl Inner {
                         None
                     }
                     Ok(transcript) => Some(inner.present_input(session, transcript, InputSource::Speech, hold::SPEECH)),
+                    // 识别最终失败时，保留松开按键前的实时文字，用户说的话不至于全部丢失。
                     Err(error) => {
-                        inner.present_failure(session, error.to_string());
+                        let spoken = match &session.phase {
+                            Phase::Processing { message } if !message.is_empty() => Some(message.clone()),
+                            _ => None,
+                        };
+                        inner.present(session, Surface::failure(spoken, error.to_string()));
                         None
                     }
                 }
@@ -350,7 +355,7 @@ impl Inner {
     }
 
     fn present_failure(self: &Arc<Self>, session: &mut Session, message: String) {
-        self.present(session, Surface::failure(message));
+        self.present(session, Surface::failure(None, message));
     }
 
     /// 展示候选框，并按停留规则在内容静止后自动隐藏。

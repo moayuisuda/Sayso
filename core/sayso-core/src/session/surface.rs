@@ -65,8 +65,9 @@ impl Surface {
         }
     }
 
-    pub fn failure(message: String) -> Self {
-        let mut surface = Surface::new(None, hold::FAILURE);
+    /// 失败提示；`input` 为失败前已得到的输入文字（如识别中断前的实时文字），保留给用户复制。
+    pub fn failure(input: Option<String>, message: String) -> Self {
+        let mut surface = Surface::new(input, hold::FAILURE);
         surface.upsert(failure_block(message), APP_SOURCE, None);
         surface
     }

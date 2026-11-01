@@ -11,6 +11,17 @@ internal static class SmokeTests
     internal const nuint InputTag = 0x53595453;
     internal static async Task Run(CoreClient core, WindowsPlatform platform, SettingsWindow window, CandidateWindow candidate, Action quit)
     {
+        if (Environment.GetCommandLineArgs().Contains("--wait-for-foreground"))
+        {
+            // 自动检查启动器可能不拥有前台权限；先让交互桌面显式激活测试窗口，再注入键鼠。
+            var handle = WinRT.Interop.WindowNative.GetWindowHandle(window);
+            var deadline = DateTime.UtcNow.AddSeconds(30);
+            while (NativeMethods.GetForegroundWindow() != handle)
+            {
+                if (DateTime.UtcNow >= deadline) throw new InvalidOperationException("请在交互桌面激活 Sayso 测试窗口后运行集成检查。");
+                await Task.Delay(50);
+            }
+        }
         var results = new JsonArray();
         async Task Check(string name, Func<Task> action)
         {
@@ -28,15 +39,16 @@ internal static class SmokeTests
         });
         await Check("Windows clipboard Unicode roundtrip and restoration", async () =>
         {
-            var saved = await ClipboardService.Snapshot();
+            using var saved = await ClipboardService.Snapshot();
             try
             {
-                ClipboardService.Copy("Sayso 文字输入 🍎");
-                var actual = await Windows.ApplicationModel.DataTransfer.Clipboard.GetContent().GetTextAsync();
+                await ClipboardService.Copy("Sayso 文字输入 🍎");
+                var (actual, _) = await NativeClipboard.ReadText();
                 if (actual != "Sayso 文字输入 🍎") throw new Exception("Clipboard content mismatch.");
             }
-            finally { Windows.ApplicationModel.DataTransfer.Clipboard.SetContent(saved); }
+            finally { await saved.Restore(); }
         });
+        await Check("Native clipboard preserves text, file lists and binary formats without overwriting newer copies", ClipboardChecks.MixedFormatsAndConcurrentCopy);
         await Check("Bitmap clipboard preserves its raw image while pasting into a real input", ClipboardChecks.InsertOverBitmap);
         await Check("Core exposes all services and builtin extensions", async () =>
         {
@@ -91,7 +103,8 @@ internal static class SmokeTests
             if ((await core.Call("session"))!["kind"]!.GetValue<string>() != "idle") throw new Exception("Selection cancellation failed.");
         });
         var inspectRecording = Environment.GetCommandLineArgs().Contains("--inspect-recording");
-        var inspect = inspectRecording || Environment.GetCommandLineArgs().Contains("--inspect-candidate");
+        var inspectGlow = Environment.GetCommandLineArgs().Contains("--inspect-glow");
+        var inspect = inspectRecording || inspectGlow || Environment.GetCommandLineArgs().Contains("--inspect-candidate");
         await Check("Missing service configuration produces a compact nonactivating candidate", async () =>
         {
             await core.Call("trigger", new JsonObject { ["kind"] = "direct" });
@@ -256,6 +269,11 @@ internal static class SmokeTests
             await Task.Run(() => platform.Handle("startAudio", null));
             candidate.Update(Recording());
             candidate.PrepareForInspection();
+        }
+        if (inspectGlow)
+        {
+            candidate.Update(new JsonObject { ["kind"] = "idle" });
+            RecordingGlowChecks.Show();
         }
         await File.WriteAllTextAsync(Path.Combine(AppContext.BaseDirectory, "smoke-results.json"), results.ToJsonString(new() { WriteIndented = true }));
         if (!inspect) quit();

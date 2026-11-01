@@ -1,6 +1,6 @@
-# 用法：./scripts/build-windows.ps1 [-Test] [-Install] [-Version 1.2.0]
+# 用法：./scripts/build-windows.ps1 [-Test] [-Install] [-Version 1.2.0] [-InstallerCompiler path/to/ISCC.exe]
 # -Version 写入程序版本号（发布流水线从 tag 传入），默认使用 Sayso.csproj 中的版本。
-param([switch]$Install, [switch]$Test, [string]$Version)
+param([switch]$Install, [switch]$Test, [string]$Version, [string]$InstallerCompiler)
 $ErrorActionPreference = 'Stop'
 $repo = Split-Path $PSScriptRoot -Parent
 $dotnet = Get-Command dotnet -ErrorAction SilentlyContinue
@@ -25,5 +25,13 @@ try {
         $results | Format-Table name, passed, error
         if ($results | Where-Object { -not $_.passed }) { throw 'Windows 集成测试失败。' }
     }
-    if ($Install) { & "$PSScriptRoot/install-windows.ps1" }
+    $installer = & "$PSScriptRoot/package-windows.ps1" -Compiler $InstallerCompiler
+    if ($Test) { & "$PSScriptRoot/test-windows-installer.ps1" -Installer $installer }
+    if ($Install) {
+        $process = Start-Process -FilePath $installer -PassThru
+        # 只等待安装向导；完成页启动的托盘应用可继续运行。
+        $process.WaitForExit()
+        if ($process.ExitCode) { throw "安装未完成，退出码：$($process.ExitCode)。" }
+    }
+    Write-Host "安装包：$installer"
 } finally { Pop-Location }

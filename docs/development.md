@@ -62,7 +62,13 @@ INSTALL=1 bash scripts/bundle-app.sh         # 构建 core 与应用，打包并
 ./scripts/build-windows.ps1 -Test -Install
 ```
 
-脚本构建 Rust 动态库和 WinUI 3 客户端，`-Test` 执行 Rust 测试与真实 Windows 集成检查，`-Install` 安装到 `%LOCALAPPDATA%\Programs\Sayso` 并创建开始菜单快捷方式。发布产物在 `build/windows/`，自带 .NET 与 Windows App SDK 运行时。
+除 .NET 10 SDK、Rust MSVC 工具链、C++ Build Tools 与 Windows SDK 外，还需要 [Inno Setup 7](https://jrsoftware.org/isdl.php)（CI 固定使用 7.1.1，并校验 SHA-256）。脚本会从 PATH 或安装注册表定位编译器，也可通过 `-InstallerCompiler` 指定 `ISCC.exe` 路径。
+
+脚本构建 Rust 动态库和 WinUI 3 客户端，再生成 `build/installers/Sayso-<版本>-windows-x64-Setup.exe`。`-Install` 打开安装向导，默认安装到 `%LOCALAPPDATA%\Programs\Sayso`，不需要管理员权限。`build/windows/` 为内部发布目录，自带 .NET 与 Windows App SDK 运行时。
+
+`-Test` 执行 Rust 测试、真实 Windows 集成检查和安装包生命周期验证。安装包测试会在工作区的独立测试目录中安装、核对全部依赖、覆盖安装并卸载，验证快捷方式、文件关联和用户数据保留；需要在尚未安装 Sayso 的账户中运行。失败时保留测试目录内的安装日志，成功时清理测试目录。
+
+修改打包规则后，无需重新编译客户端，可运行 `./scripts/package-windows.ps1`。安装、升级、卸载统一由 `scripts/windows-installer.iss` 定义，不再维护独立的 PowerShell 安装规则。
 
 集成测试使用独立临时目录和独立凭据命名空间，报告写入 `build/windows/smoke-results.json`。这些检查覆盖本地能力，云端识别与翻译需要另外配置真实服务后验证。
 
@@ -75,7 +81,9 @@ git tag v0.2.0
 git push origin v0.2.0
 ```
 
-流水线先跑 core 测试，再分别构建 `Sayso-<版本>-macOS-arm64.zip`（`Sayso.app`）与 `Sayso-<版本>-windows-x64.zip`（`app/` 程序目录加安装、卸载脚本），最后创建同名 GitHub Release 并附上两个压缩包。版本号取自 tag，写入 `Info.plist` 与 `Sayso.exe`，「已安装的应用」中的版本由安装脚本从 `Sayso.exe` 读取。
+流水线先跑 core 测试，再分别构建 `Sayso-<版本>-macOS-arm64.zip`（`Sayso.app`）与 `Sayso-<版本>-windows-x64-Setup.exe`，最后创建同名 GitHub Release 并附上两个安装文件。版本号取自 tag，写入 `Info.plist` 与 `Sayso.exe`；Windows 安装包从 `Sayso.exe` 读取版本，统一安装向导与「已安装的应用」中的版本信息。
+
+Windows 安装包包含全部运行时，创建开始菜单入口并注册 `.sayso` 打开方式。安装与卸载会通过应用的命名互斥量检查运行状态，提示先从托盘退出。稳定的 `AppId` 让新版覆盖同一安装，卸载仅移除安装文件及其注册项，保留 `%LOCALAPPDATA%\Sayso` 下的设置、密钥与扩展数据。
 
 macOS 包只包含 Apple 芯片版本，用 Developer ID Application 证书签名（开启 Hardened Runtime，权限声明见 `Resources/Sayso.entitlements`）并经 Apple 公证，公证票据钉在 app 中。仓库需要配置以下 secrets：
 

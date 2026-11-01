@@ -79,20 +79,24 @@ jobs:
     runs-on: windows-2025
     steps:
       - uses: actions/checkout@v6
+      - name: Install Inno Setup
+        run: |
+          $installer = Join-Path $env:RUNNER_TEMP 'innosetup.exe'
+          Invoke-WebRequest 'https://github.com/jrsoftware/issrc/releases/download/is-7_1_1/innosetup-7.1.1-x64.exe' -OutFile $installer
+          if ((Get-FileHash -LiteralPath $installer -Algorithm SHA256).Hash -ne '8A5A6711C3766A6E5FB74F280BA0E3551E719CE94538D901FDBD1F8F9920B3F0') {
+            throw 'Inno Setup 校验失败。'
+          }
+          $process = Start-Process -FilePath $installer -ArgumentList '/VERYSILENT', '/SUPPRESSMSGBOXES', '/NORESTART', '/CURRENTUSER' -Wait -PassThru -WindowStyle Hidden
+          if ($process.ExitCode) { throw "Inno Setup 安装失败：$($process.ExitCode)" }
       - name: Build
         run: ./scripts/build-windows.ps1 -Version ($env:GITHUB_REF_NAME.TrimStart('v'))
-      # 安装脚本与程序同包发布：解压后运行 install-windows.ps1 -Source app。
-      - name: Package
-        run: |
-          $version = $env:GITHUB_REF_NAME.TrimStart('v')
-          New-Item -ItemType Directory dist | Out-Null
-          Copy-Item build/windows dist/app -Recurse
-          Copy-Item scripts/install-windows.ps1, scripts/uninstall-windows.ps1 dist/
-          Compress-Archive -Path dist/* -DestinationPath "Sayso-$version-windows-x64.zip"
+      - name: Test installer lifecycle
+        run: ./scripts/test-windows-installer.ps1 -Installer (Get-Item build/installers/*-Setup.exe).FullName
       - uses: actions/upload-artifact@v6
         with:
           name: windows
-          path: Sayso-*-windows-x64.zip
+          path: build/installers/Sayso-*-windows-x64-Setup.exe
+          if-no-files-found: error
 
   release:
     needs: [macos, windows]
@@ -104,4 +108,4 @@ jobs:
       - name: Publish
         env:
           GH_TOKEN: ${{ github.token }}
-        run: gh release create "$GITHUB_REF_NAME" Sayso-*.zip --repo "$GITHUB_REPOSITORY" --title "$GITHUB_REF_NAME" --generate-notes
+        run: gh release create "$GITHUB_REF_NAME" Sayso-*.zip Sayso-*-Setup.exe --repo "$GITHUB_REPOSITORY" --title "$GITHUB_REF_NAME" --generate-notes

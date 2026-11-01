@@ -4,6 +4,7 @@ mod anthropic;
 mod openai;
 mod provider;
 
+use std::error::Error;
 use std::time::Duration;
 
 pub use provider::*;
@@ -97,14 +98,9 @@ impl Endpoint {
 
 /// 发送 JSON 请求并校验 HTTP 状态，供各协议客户端复用。
 async fn post_json(request: reqwest::RequestBuilder, body: serde_json::Value) -> Result<serde_json::Value, CoreError> {
-    let response = request
-        .json(&body)
-        .timeout(Duration::from_secs(30))
-        .send()
-        .await
-        .map_err(|error| CoreError::Llm(error.to_string()))?;
+    let response = request.json(&body).timeout(Duration::from_secs(30)).send().await.map_err(request_error)?;
     let status = response.status();
-    let text = response.text().await.map_err(|error| CoreError::Llm(error.to_string()))?;
+    let text = response.text().await.map_err(request_error)?;
     if !status.is_success() {
         let body: String = text.chars().take(300).collect();
         return Err(CoreError::Llm(format!("LLM HTTP {}: {body}", status.as_u16())));
@@ -114,4 +110,38 @@ async fn post_json(request: reqwest::RequestBuilder, body: serde_json::Value) ->
 
 fn empty_response() -> CoreError {
     CoreError::Llm("LLM returned no text".into())
+}
+
+/// 保留 DNS、代理、TLS 和超时等底层原因，避免只显示泛化的发送失败。
+fn request_error(error: reqwest::Error) -> CoreError {
+    let mut message = error.to_string();
+    let mut source = error.source();
+    while let Some(cause) = source {
+        message.push_str(": ");
+        message.push_str(&cause.to_string());
+        source = cause.source();
+    }
+    CoreError::Llm(message)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use tokio::io::AsyncReadExt;
+
+    #[tokio::test]
+    async fn request_errors_include_the_transport_failure() {
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let address = listener.local_addr().unwrap();
+        let server = tokio::spawn(async move {
+            let (mut stream, _) = listener.accept().await.unwrap();
+            let mut buffer = [0; 1024];
+            stream.read(&mut buffer).await.unwrap();
+            // 服务端收到真实请求后断开，验证用户能看到底层连接错误。
+        });
+        let client = reqwest::Client::builder().no_proxy().build().unwrap();
+        let error = post_json(client.post(format!("http://{address}/test")), serde_json::json!({})).await.unwrap_err();
+        server.await.unwrap();
+        assert!(error.to_string().contains("connection"), "{error}");
+    }
 }

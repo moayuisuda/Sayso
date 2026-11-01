@@ -90,6 +90,7 @@ internal sealed class RecordingGlow : Grid
 
     private void Resize(Vector2 size)
     {
+        container.Size = size;
         clip.Size = size;
         edge.Resize(size, cornerRadius);
         foreach (var glow in glows) glow.Resize(size, cornerRadius);
@@ -209,13 +210,14 @@ internal sealed class RecordingGlow : Grid
         private const float Margin = RingWidth + 48;
         private readonly CompositionRoundedRectangleGeometry geometry;
         private readonly ShapeVisual ring;
+        private readonly CompositionVisualSurface mask;
         private readonly DropShadow shadow;
         private readonly FlowGradient gradient;
         private readonly Color[] palette;
         private readonly (double, double) blur, opacity;
         private readonly double seed;
 
-        internal LayerVisual Visual { get; }
+        internal SpriteVisual Visual { get; }
 
         internal GlowLayer(Compositor compositor, Color[] palette, (double, double) blur, (double, double) opacity, double speed, double seed)
         {
@@ -230,17 +232,21 @@ internal sealed class RecordingGlow : Grid
             shape.StrokeThickness = RingWidth;
             ring = compositor.CreateShapeVisual();
             ring.Shapes.Add(shape);
-            // LayerVisual 的投影由图层内容（光环）的透明度生成。
+            // 光环只作为离屏 alpha 蒙版，不加入可见树；显示层只绘制柔光，
+            // 避免 LayerVisual 同时把外扩光环的原始内容合成到录音文字上。
+            mask = compositor.CreateVisualSurface();
+            mask.SourceVisual = ring;
             shadow = compositor.CreateDropShadow();
-            Visual = compositor.CreateLayerVisual();
+            shadow.Mask = compositor.CreateSurfaceBrush(mask);
+            Visual = compositor.CreateSpriteVisual();
             Visual.Shadow = shadow;
-            Visual.Children.InsertAtTop(ring);
         }
 
         internal void Resize(Vector2 size, float cornerRadius)
         {
             Visual.Offset = new(-Margin, -Margin, 0);
             Visual.Size = ring.Size = size + new Vector2(Margin * 2);
+            mask.SourceSize = ring.Size;
             // 描边以几何轮廓为中心：轮廓外扩半个环宽，光环内沿正好落在面板边缘。
             geometry.Offset = new(Margin - RingWidth / 2);
             geometry.Size = size + new Vector2(RingWidth);

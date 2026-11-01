@@ -4,7 +4,7 @@
 
 # Sayso 言出
 
-**说你正在学的语言，卡住的词用母语补上。**
+**每一次输入框的输入，都是一次口语学习**
 
 面向外语学习者的语音输入法。混在句子里的母语会翻译为目标语言后写入，<br>
 译文在候选框中高亮、朗读，并可收入生词本，放入本地笔记，甚至自定义处理。
@@ -106,7 +106,7 @@ flowchart LR
 
 ## 安装
 
-从 [Releases](https://github.com/moayuisuda/Sayso/releases/latest) 下载对应系统的压缩包。
+从 [Releases](https://github.com/moayuisuda/Sayso/releases/latest) 下载对应系统的安装文件。
 
 ### macOS
 
@@ -116,13 +116,9 @@ flowchart LR
 
 ### Windows
 
-需要 Windows 10 2004 及以上（x64）。在解压目录中打开 PowerShell 运行：
+需要 Windows 10 2004 及以上（x64）。下载并双击 `Sayso-<版本>-windows-x64-Setup.exe`，按向导安装，无需管理员权限或单独安装运行时。
 
-```powershell
-powershell -ExecutionPolicy Bypass -File .\install-windows.ps1 -Source app
-```
-
-安装后从开始菜单启动，关闭设置窗口后常驻系统托盘。
+安装后从开始菜单启动，关闭设置窗口后常驻系统托盘。更新时先从托盘退出，再运行新版安装包。
 
 - 需在 Windows 设置中允许桌面应用访问麦克风。
 - 朗读使用系统语音。缺少对应语言时，从「设置 → 通用 → 朗读 → 管理朗读语音」安装，完成后重启 Sayso。
@@ -131,6 +127,6 @@ powershell -ExecutionPolicy Bypass -File .\install-windows.ps1 -Source app
 ### 从源码构建
 
 - **macOS**：需要 Xcode 26 与 [Rust](https://rustup.rs)，运行 `INSTALL=1 bash scripts/bundle-app.sh`。
-- **Windows**：需要 .NET 10 SDK、Rust（MSVC 工具链）、Visual Studio Build Tools 的 C++ 工具与 Windows SDK，运行 `./scripts/build-windows.ps1 -Install`。
+- **Windows**：需要 .NET 10 SDK、Rust（MSVC 工具链）、Visual Studio Build Tools 的 C++ 工具与 Windows SDK，以及 [Inno Setup 7](https://jrsoftware.org/isdl.php)，运行 `./scripts/build-windows.ps1 -Install`。
 
 发版流程见 [开发说明](docs/development.md#发版)。

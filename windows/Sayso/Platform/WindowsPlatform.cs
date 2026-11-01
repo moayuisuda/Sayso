@@ -35,7 +35,7 @@ internal sealed class WindowsPlatform(DispatcherQueue dispatcher) : IDisposable
                 NativeMethods.GetWindowThreadProcessId(window, out var process);
                 if (process == Environment.ProcessId || window == 0) return null;
                 return new JsonObject { ["id"] = window.ToInt64().ToString(), ["name"] = Process.GetProcessById((int)process).ProcessName };
-            case "copyText": return OnUI(() => { ClipboardService.Copy(args!.GetValue<string>()); return Task.FromResult<JsonNode?>(null); }).GetAwaiter().GetResult();
+            case "copyText": return OnUI(async () => { await ClipboardService.Copy(args!.GetValue<string>()); return null; }).GetAwaiter().GetResult();
             case "openUrl": Open(args!.GetValue<string>()); return null;
             case "speak":
                 Speak(args!["text"]!.GetValue<string>(), args["language"]!.GetValue<string>(), args["rate"]!.GetValue<float>());

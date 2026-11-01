@@ -11,7 +11,7 @@ uniffi = { workspace = true }
 async-trait = "0.1"
 futures-util = { version = "0.3", default-features = false, features = ["sink", "std"] }
 rquickjs = { version = "0.14", features = ["futures", "macro", "loader", "parallel"] }
-reqwest = { version = "0.13", default-features = false, features = ["rustls", "json", "multipart", "http2"] }
+reqwest = { version = "0.13", default-features = false, features = ["rustls", "json", "multipart", "http2", "system-proxy"] }
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 thiserror = "2"

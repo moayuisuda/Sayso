@@ -15,9 +15,6 @@ if (-not $Compiler) {
     }
 }
 if (-not $Compiler) { throw '请安装 Inno Setup 7，或通过 -Compiler 指定 ISCC.exe。' }
-# 安装脚本依赖 Inno Setup 7 自带的简体中文语言文件，旧版本会在编译中途失败。
-$compilerVersion = (Get-Item -LiteralPath $Compiler).VersionInfo.FileMajorPart
-if ($compilerVersion -lt 7) { throw "需要 Inno Setup 7，当前 $Compiler 为 $compilerVersion.x。" }
 foreach ($file in @('Sayso.exe', 'sayso_windows_bridge.dll')) {
     if (-not (Test-Path -LiteralPath (Join-Path $source $file))) { throw "缺少 $file，请先构建 Windows 客户端。" }
 }

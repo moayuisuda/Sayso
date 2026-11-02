@@ -1,3 +1,4 @@
+using System.Reflection;
 using System.Text.Json.Nodes;
 using Microsoft.UI.Xaml;
 using Sayso.Interop;
@@ -19,6 +20,8 @@ public partial class App : Application
     internal static readonly string DataDirectory = Environment.GetCommandLineArgs().Contains("--smoke-test")
         ? Path.Combine(Path.GetTempPath(), "Sayso-smoke-" + Environment.ProcessId)
         : Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData), "Sayso");
+    /// 程序版本号，构建时由 -p:Version 写入（发布流水线从 tag 传入）。
+    private static readonly string Version = typeof(App).Assembly.GetCustomAttribute<AssemblyInformationalVersionAttribute>()!.InformationalVersion;
 
     public App()
     {
@@ -42,7 +45,7 @@ public partial class App : Application
         {
             Directory.CreateDirectory(DataDirectory);
             platform = new WindowsPlatform(Microsoft.UI.Dispatching.DispatcherQueue.GetForCurrentThread());
-            core = await Task.Run(() => new CoreClient(DataDirectory, platform.Handle));
+            core = await Task.Run(() => new CoreClient(DataDirectory, Version, platform.Handle));
             platform.Core = core;
             settings = new SettingsWindow(core, platform);
             candidate = new CandidateWindow(core, settings.L, settings.Show, () => platform.AudioLevel);
@@ -51,7 +54,8 @@ public partial class App : Application
             settings.Hotkeys = hotkeys;
             platform.Changed += OnChanged;
             await settings.Initialize();
-            tray = new TrayIcon(WinRT.Interop.WindowNative.GetWindowHandle(settings), settings.Show, () => Quit(), settings.L);
+            tray = new TrayIcon(WinRT.Interop.WindowNative.GetWindowHandle(settings), settings.Show, () => Quit(), settings.L,
+                () => settings.Update?["version"]!.GetValue<string>(), settings.OpenUpdate);
             instance.Listen(Microsoft.UI.Dispatching.DispatcherQueue.GetForCurrentThread(), path =>
             {
                 settings.Show();
@@ -59,7 +63,12 @@ public partial class App : Application
             });
             settings.Show();
             if (Environment.GetCommandLineArgs().Contains("--smoke-test")) await SmokeTests.Run(core, platform, settings, candidate, Quit);
-            else if (packagePath is not null) await settings.InstallPackage(packagePath);
+            else
+            {
+                // 冒烟测试不访问网络，只在正常启动时检查更新。
+                await core.Call("startUpdateChecks");
+                if (packagePath is not null) await settings.InstallPackage(packagePath);
+            }
         }
         catch (Exception error)
         {
@@ -79,6 +88,11 @@ public partial class App : Application
             case "settingsChanged": settings.Run(settings.ReloadSettings); break;
             case "extensionsChanged": settings.Run(settings.ReloadExtensions); break;
             case "storeChanged": settings.RefreshStore(value!.GetValue<string>()); break;
+            case "updateAvailable":
+                settings.Run(() => settings.UpdateAvailable(value!));
+                tray?.NotifyUpdate(settings.L("Sayso 有新版本", "Sayso update available"),
+                    settings.L($"{value!["version"]!.GetValue<string>()} 已发布，点击前往下载。", $"Version {value!["version"]!.GetValue<string>()} is out. Click to download."));
+                break;
         }
     }
 

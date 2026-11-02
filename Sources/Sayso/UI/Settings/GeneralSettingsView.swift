@@ -117,6 +117,10 @@ struct GeneralSettingsView: View {
                     Permissions.promptAccessibility()
                 }
             }
+
+            SettingsSection(L("关于", "About")) {
+                VersionRow(model: model)
+            }
         }
         .onReceive(permissionTimer) { _ in
             microphoneGranted = Permissions.microphoneGranted
@@ -163,6 +167,65 @@ private struct PermissionRow: View {
                 Button(L("去授权", "Grant"), action: request)
                     .buttonStyle(.borderedProminent)
             }
+        }
+    }
+}
+
+/// 当前版本与手动检查更新；已发现新版本时显示下载入口。
+private struct VersionRow: View {
+    let model: CoreModel
+
+    private enum CheckResult {
+        case upToDate
+        case failed(String)
+    }
+
+    @State private var checking = false
+    @State private var result: CheckResult?
+
+    var body: some View {
+        SettingsRow(title: L("版本", "Version")) {
+            HStack(spacing: 12) {
+                Text(model.core.appVersion())
+                    .monospacedDigit()
+                Button(L("检查更新", "Check for updates"), action: check)
+                    .buttonStyle(.chip)
+                    .disabled(checking)
+                if checking {
+                    ProgressView().controlSize(.small)
+                }
+            }
+            status
+                .font(.system(size: 12))
+        }
+    }
+
+    @ViewBuilder
+    private var status: some View {
+        if let update = model.update, let url = URL(string: update.url) {
+            HStack(spacing: 8) {
+                Label(L("新版本 \(update.version) 已发布", "Version \(update.version) is available"), systemImage: "arrow.down.circle.fill")
+                    .foregroundStyle(Theme.accent)
+                Link(L("前往下载", "Download"), destination: url)
+            }
+        } else if case .failed(let message) = result {
+            Label(message, systemImage: "exclamationmark.triangle.fill")
+                .foregroundStyle(.red)
+        } else if case .upToDate = result {
+            Label(L("已是最新版本", "You're up to date"), systemImage: "checkmark.circle.fill")
+                .foregroundStyle(.secondary)
+        }
+    }
+
+    private func check() {
+        checking = true
+        Task {
+            do {
+                result = try await model.checkForUpdate() == nil ? .upToDate : nil
+            } catch {
+                result = .failed(describe(error))
+            }
+            checking = false
         }
     }
 }

@@ -18,6 +18,7 @@ use crate::protocol::{Block, BlockAction, InputSource, Manifest};
 use crate::session::{ActionContext, Session, SessionState};
 use crate::settings::{self, CommandKey, PlatformDefaults, RouteKey, SecretSlot, Secrets, Settings};
 use crate::store::{StoreWrite, Stores};
+use crate::update::{self, AppRelease};
 
 /// 数据目录布局，与此前版本一致：已安装扩展与扩展数据都在其中。
 struct Paths {
@@ -42,6 +43,10 @@ pub(crate) struct Inner {
     staged_packages: Mutex<HashMap<String, PackageContents>>,
     pub http: reqwest::Client,
     pub runtime: tokio::runtime::Handle,
+    /// 宿主应用的版本号，如 `1.2.0`。
+    app_version: String,
+    /// 已发现的比当前版本新的正式版。
+    available_update: Mutex<Option<AppRelease>>,
 }
 
 impl Inner {
@@ -73,6 +78,21 @@ impl Inner {
     fn reload_extensions(&self) {
         self.extensions.write().unwrap().reload_installed(&self.paths.extensions);
         self.observer.extensions_changed();
+    }
+
+    /// 读取最新正式版并记录。`notify` 为真且发现与已知不同的新版本时推送给宿主（后台检查用于提醒；
+    /// 用户手动检查时结果直接显示在界面上，不再推送）。
+    async fn check_for_update(&self, notify: bool) -> Result<Option<AppRelease>, CoreError> {
+        let latest = update::latest_release(&self.http).await?;
+        let newer = update::is_newer(&latest.version, &self.app_version).then_some(latest);
+        let previous = std::mem::replace(&mut *self.available_update.lock().unwrap(), newer.clone());
+        if let Some(release) = newer.as_ref().filter(|release| previous.as_ref() != Some(release)) {
+            log::info!("update available: {} -> {}", self.app_version, release.version);
+            if notify {
+                self.observer.update_available(release.clone());
+            }
+        }
+        Ok(newer)
     }
 }
 
@@ -111,10 +131,11 @@ pub struct Core {
 
 #[uniffi::export]
 impl Core {
-    /// `data_dir` 为应用数据目录（macOS：~/Library/Application Support/Sayso）。
+    /// `data_dir` 为应用数据目录（macOS：~/Library/Application Support/Sayso）；`app_version` 为宿主应用的版本号。
     #[uniffi::constructor]
     pub fn new(
         data_dir: String,
+        app_version: String,
         defaults: PlatformDefaults,
         platform: Arc<dyn Platform>,
         observer: Arc<dyn CoreObserver>,
@@ -146,6 +167,8 @@ impl Core {
             staged_packages: Mutex::default(),
             http,
             runtime: runtime.handle().clone(),
+            app_version,
+            available_update: Mutex::default(),
         });
         Ok(Arc::new(Core { inner, _runtime: runtime }))
     }
@@ -314,6 +337,42 @@ impl Core {
             .spawn(async move { endpoint.complete(&http, &system, "Hello, world").await })
             .await
             .map_err(|error| CoreError::Llm(error.to_string()))?
+    }
+
+    // MARK: 版本更新
+
+    pub fn app_version(&self) -> String {
+        self.inner.app_version.clone()
+    }
+
+    /// 最近一次检查发现的新版本；尚未检查或已是最新时为空。
+    pub fn available_update(&self) -> Option<AppRelease> {
+        self.inner.available_update.lock().unwrap().clone()
+    }
+
+    /// 立即检查更新，返回比当前版本新的正式版；已是最新时为空。结果不经 [`CoreObserver`] 推送。
+    pub async fn check_for_update(&self) -> Result<Option<AppRelease>, CoreError> {
+        let inner = self.inner.clone();
+        self.inner
+            .runtime
+            .spawn(async move { inner.check_for_update(false).await })
+            .await
+            .map_err(|error| CoreError::Update(error.to_string()))?
+    }
+
+    /// 开始后台检查更新：立即检查一次，之后每天一次。宿主启动完成后调用一次。
+    pub fn start_update_checks(&self) {
+        let inner = Arc::downgrade(&self.inner);
+        self.inner.runtime.spawn(async move {
+            let mut interval = tokio::time::interval(update::CHECK_INTERVAL);
+            loop {
+                interval.tick().await;
+                let Some(inner) = inner.upgrade() else { return };
+                if let Err(error) = inner.check_for_update(true).await {
+                    log::warn!("{error}");
+                }
+            }
+        });
     }
 
     // MARK: 扩展

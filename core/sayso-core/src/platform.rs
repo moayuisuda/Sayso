@@ -46,4 +46,6 @@ pub trait CoreObserver: Send + Sync {
     /// 某个扩展的数据变化，页签需要刷新。
     fn store_changed(&self, extension_id: String);
     fn settings_changed(&self);
+    /// 后台检查发现比当前版本新的正式版；同一版本每次运行只推送一次。
+    fn update_available(&self, release: crate::update::AppRelease);
 }

@@ -8,7 +8,7 @@ internal sealed class CoreClient : IDisposable
 {
     [UnmanagedFunctionPointer(CallingConvention.Cdecl)] internal delegate nint Callback(nint request);
     [UnmanagedFunctionPointer(CallingConvention.Cdecl)] internal delegate void Release(nint value);
-    [DllImport("sayso_windows_bridge", CallingConvention = CallingConvention.Cdecl)] private static extern nint sayso_create([MarshalAs(UnmanagedType.LPUTF8Str)] string directory, Callback callback, Release release, out nint handle);
+    [DllImport("sayso_windows_bridge", CallingConvention = CallingConvention.Cdecl)] private static extern nint sayso_create([MarshalAs(UnmanagedType.LPUTF8Str)] string directory, [MarshalAs(UnmanagedType.LPUTF8Str)] string version, Callback callback, Release release, out nint handle);
     [DllImport("sayso_windows_bridge", CallingConvention = CallingConvention.Cdecl)] private static extern nint sayso_call(nint handle, [MarshalAs(UnmanagedType.LPUTF8Str)] string request);
     [DllImport("sayso_windows_bridge", CallingConvention = CallingConvention.Cdecl)] private static extern void sayso_audio(nint handle, byte[] data, nuint length);
     [DllImport("sayso_windows_bridge", CallingConvention = CallingConvention.Cdecl)] private static extern void sayso_complete(nint handle, ulong id, [MarshalAs(UnmanagedType.LPUTF8Str)] string response);
@@ -21,7 +21,7 @@ internal sealed class CoreClient : IDisposable
     private readonly SemaphoreSlim requests = new(1);
     private readonly object lifetime = new();
 
-    public CoreClient(string directory, Func<string, JsonNode?, JsonNode?> platform)
+    public CoreClient(string directory, string version, Func<string, JsonNode?, JsonNode?> platform)
     {
         callback = pointer =>
         {
@@ -34,7 +34,7 @@ internal sealed class CoreClient : IDisposable
             catch (Exception error) { response = new() { ["error"] = error.Message }; }
             return Marshal.StringToCoTaskMemUTF8(response.ToJsonString());
         };
-        Read(sayso_create(directory, callback, release, out handle));
+        Read(sayso_create(directory, version, callback, release, out handle));
     }
 
     public async Task<JsonNode?> Call(string method, JsonNode? args = null)

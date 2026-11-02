@@ -41,7 +41,7 @@ internal sealed class WindowsPlatform(DispatcherQueue dispatcher) : IDisposable
                 Speak(args!["text"]!.GetValue<string>(), args["language"]!.GetValue<string>(), args["rate"]!.GetValue<float>());
                 return null;
             case "stopSpeaking": lock (speechLock) speech.SpeakAsyncCancelAll(); return null;
-            case "sessionChanged": case "settingsChanged": case "extensionsChanged": case "storeChanged":
+            case "sessionChanged": case "settingsChanged": case "extensionsChanged": case "storeChanged": case "updateAvailable":
                 var snapshot = args?.DeepClone();
                 dispatcher.TryEnqueue(() => Changed?.Invoke(method, snapshot));
                 return null;

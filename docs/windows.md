@@ -15,7 +15,7 @@ Windows 客户端使用 WinUI 3。配色、圆角、顶部页签、卡片列宽�
 `sayso-core` 是设置、扩展、存储、识别、翻译与会话的唯一实现。Swift 宿主使用已有 UniFFI 绑定；
 Windows 宿主通过 `sayso-windows-bridge` 的窄 C ABI 调用相同的 `Core`，不复制业务规则。
 
-- `sayso_create` 创建唯一实例，传入平台回调与对应内存释放函数。
+- `sayso_create` 创建唯一实例，传入程序版本号、平台回调与对应内存释放函数。
 - `sayso_call` 执行请求并返回 UTF-8 JSON，返回内存由 `sayso_free` 释放。
 - `sayso_audio` 接收 16 kHz、单声道、16 位小端 PCM。
 - `sayso_complete` 完成异步选区或文字写入调用；会话取消时取消信号会传回 Windows。

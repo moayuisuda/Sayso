@@ -66,8 +66,39 @@ internal sealed partial class SettingsWindow
                 Controls.Row(L("语速", "Speed"), Controls.Horizontal(rate, Controls.Button(L("试听", "Preview"), () => Run(() => Task.Run(() => platform!.Speak("Practice makes perfect.", "en-US", (float)rate.Value))))))),
             Controls.Section(L("权限", "Permissions"),
                 Controls.Row(L("麦克风", "Microphone"), Controls.Button(L("打开麦克风设置", "Microphone settings"), () => WindowsPlatform.Open("ms-settings:privacy-microphone")), L("请允许桌面应用访问麦克风。录音只在快捷键触发时进行。", "Allow desktop apps to access the microphone. Recording starts only when triggered.")),
-                Controls.Row(L("数据文件夹", "Data folder"), Controls.Button(L("打开文件夹", "Open folder"), () => WindowsPlatform.Open(App.DataDirectory)), L("API Key 保存在数据文件夹的 config.json 中。", "API keys are stored in config.json in the data folder.")))
+                Controls.Row(L("数据文件夹", "Data folder"), Controls.Button(L("打开文件夹", "Open folder"), () => WindowsPlatform.Open(App.DataDirectory)), L("API Key 保存在数据文件夹的 config.json 中。", "API keys are stored in config.json in the data folder."))),
+            Controls.Section(L("关于", "About"), VersionRow())
         );
+    }
+
+    /// 当前版本与手动检查更新；已发现新版本时显示下载入口。
+    private UIElement VersionRow()
+    {
+        var status = Controls.Text("", 12, 0.62);
+        var download = Controls.Button(L("前往下载", "Download"), OpenUpdate);
+        void ShowUpdate()
+        {
+            download.Visibility = Update is null ? Visibility.Collapsed : Visibility.Visible;
+            if (Update is { } update) status.Text = L($"新版本 {update["version"]!.GetValue<string>()} 已发布", $"Version {update["version"]!.GetValue<string>()} is available");
+        }
+        var check = Controls.Button(L("检查更新", "Check for updates"), () => { });
+        check.Click += (_, _) => Run(async () =>
+        {
+            check.IsEnabled = false;
+            status.Text = L("正在检查…", "Checking…");
+            try
+            {
+                Update = await core!.Call("checkForUpdate");
+                if (Update is null) status.Text = L("已是最新版本", "You're up to date");
+                ShowUpdate();
+            }
+            catch (Exception error) { status.Text = error.Message; }
+            finally { check.IsEnabled = true; }
+        });
+        ShowUpdate();
+        var content = Controls.Stack(Controls.Horizontal(Controls.Text(appVersion), check), Controls.Horizontal(status, download));
+        content.Spacing = 6;
+        return Controls.Row(L("版本", "Version"), content);
     }
 
     private async Task<UIElement> ModelsPage() => Controls.Page(await SpeechModelSection(), await LlmSection());

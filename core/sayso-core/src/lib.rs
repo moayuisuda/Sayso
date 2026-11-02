@@ -18,7 +18,9 @@ pub mod session;
 pub mod settings;
 pub mod store;
 mod time_util;
+pub mod update;
 
 pub use app::{Core, PackageInfo, TabItem, TabItems};
 pub use logging::{LogLevel, LogSink};
 pub use platform::{CoreObserver, Platform, PlatformError};
+pub use update::AppRelease;

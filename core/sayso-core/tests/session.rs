@@ -12,7 +12,7 @@ use sayso_core::protocol::{ActionKind, AppInfo, BlockAction, BlockContent, Deliv
 use sayso_core::session::{SessionState, SurfaceView};
 use sayso_core::llm::LlmProvider;
 use sayso_core::settings::{CommandKey, Hotkey, PlatformDefaults, RouteKey, SecretSlot};
-use sayso_core::{Core, CoreObserver, Platform, PlatformError};
+use sayso_core::{AppRelease, Core, CoreObserver, Platform, PlatformError};
 
 const SELECTION_KEY: u16 = 17;
 
@@ -89,6 +89,7 @@ impl CoreObserver for RecordingObserver {
     fn extensions_changed(&self) {}
     fn store_changed(&self, _extension_id: String) {}
     fn settings_changed(&self) {}
+    fn update_available(&self, _release: AppRelease) {}
 }
 
 /// 在真实 TCP 连接上检查批量识别契约；Drop 唤醒 accept，避免未使用的服务线程泄漏。
@@ -199,7 +200,7 @@ fn fixture(selection: Option<&str>) -> (tempfile::TempDir, Core, Arc<FakePlatfor
         selection_route_key: SELECTION_KEY,
         speech_rate: 0.5,
     };
-    let core = Core::new(data.path().to_string_lossy().into(), defaults, platform.clone(), observer.clone()).unwrap();
+    let core = Core::new(data.path().to_string_lossy().into(), "0.0.0".into(), defaults, platform.clone(), observer.clone()).unwrap();
     let core = Arc::try_unwrap(core).ok().unwrap();
 
     let mut settings = core.settings();

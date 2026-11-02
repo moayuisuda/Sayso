@@ -83,6 +83,8 @@ git push origin v0.2.0
 
 流水线先跑 core 测试，再分别构建 `Sayso-<版本>-macOS-arm64.zip`（`Sayso.app`）与 `Sayso-<版本>-windows-x64-Setup.exe`，最后创建同名 GitHub Release 并附上两个安装文件。版本号取自 tag，写入 `Info.plist` 与 `Sayso.exe`；Windows 安装包从 `Sayso.exe` 读取版本，统一安装向导与「已安装的应用」中的版本信息。
 
+应用启动后（之后每天一次）由 core 读取本仓库 GitHub Releases 的最新正式版，比当前版本新时发送系统通知，并在菜单栏 / 托盘菜单与设置「通用 › 关于」中显示下载入口。草稿与预发布版本不会触发提醒。
+
 Windows 安装包包含全部运行时，创建开始菜单入口并注册 `.sayso` 打开方式。安装与卸载会通过应用的命名互斥量检查运行状态，提示先从托盘退出。稳定的 `AppId` 让新版覆盖同一安装，卸载仅移除安装文件及其注册项，保留 `%LOCALAPPDATA%\Sayso` 下的设置、密钥与扩展数据。
 
 macOS 包只包含 Apple 芯片版本，用 Developer ID Application 证书签名（开启 Hardened Runtime，权限声明见 `Resources/Sayso.entitlements`）并经 Apple 公证，公证票据钉在 app 中。仓库需要配置以下 secrets：

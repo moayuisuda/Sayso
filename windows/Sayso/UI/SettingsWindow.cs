@@ -24,6 +24,9 @@ internal sealed partial class SettingsWindow : Window
     private JsonArray asrSources = [];
     private JsonArray providers = [];
     internal JsonNode Settings { get; private set; } = null!;
+    /// 已发现的比当前版本新的正式版（version、url）；尚未发现时为 null。
+    internal JsonNode? Update { get; private set; }
+    private string appVersion = "";
     internal HotkeyMonitor? Hotkeys { get; set; }
     private string selected = "general";
     private bool dialogOpen;
@@ -107,6 +110,8 @@ internal sealed partial class SettingsWindow : Window
         asrSources = (await core.Call("asrSources"))!.AsArray();
         providers = (await core.Call("providers"))!.AsArray();
         extensions = (await core.Call("extensions"))!.AsArray();
+        appVersion = (await core.Call("appVersion"))!.GetValue<string>();
+        Update = await core.Call("availableUpdate");
         Hotkeys!.Settings = Settings;
         await UpdateActiveRoutes();
         BuildTabs();
@@ -138,6 +143,15 @@ internal sealed partial class SettingsWindow : Window
         BuildTabs();
         if (selected == "extensions" || selected.StartsWith("sayso.") || extensions.Any(e => e!["manifest"]!["id"]!.GetValue<string>() == selected)) await Navigate(selected);
     }
+
+    /// 后台检查发现新版本，刷新通用页的版本行。
+    internal async Task UpdateAvailable(JsonNode release)
+    {
+        Update = release;
+        if (selected == "general") await Navigate(selected);
+    }
+
+    internal void OpenUpdate() { if (Update is { } update) WindowsPlatform.Open(update["url"]!.GetValue<string>()); }
 
     internal void RefreshStore(string id) { if (selected == id) Run(() => Navigate(id)); }
     private async Task UpdateActiveRoutes() => Hotkeys!.ActiveRouteKeys = (await core!.Call("activeRouteKeys"))!.AsArray().Select(key => key!.GetValue<uint>()).ToHashSet();

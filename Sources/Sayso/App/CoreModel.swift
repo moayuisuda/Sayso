@@ -19,9 +19,13 @@ final class CoreModel {
     private(set) var problems: [CatalogProblem] = []
     /// 每个扩展的数据版本，数据变化时递增，页签据此刷新。
     private(set) var storeRevisions: [String: Int] = [:]
+    /// 已发现的比当前版本新的正式版。
+    private(set) var update: AppRelease?
     /// 录音音量，只用于界面显示，不经过 core；不参与观察，由录音界面按帧读取。
     let audioLevel = AudioLevel()
     @ObservationIgnored var onSessionChange: (SessionState) -> Void = { _ in }
+    /// core 后台检查发现新版本时调用，用于发送系统通知。
+    @ObservationIgnored var onUpdateAvailable: (AppRelease) -> Void = { _ in }
 
     @ObservationIgnored private let logger = Logger(subsystem: "com.sayso.app", category: "core")
 
@@ -30,6 +34,8 @@ final class CoreModel {
         let observer = ObserverBridge()
         core = try Core(
             dataDir: AppPaths.root.path,
+            // bundle-app.sh 从发布 tag 写入 Info.plist。
+            appVersion: Bundle.main.object(forInfoDictionaryKey: "CFBundleShortVersionString") as! String,
             defaults: PlatformDefaults(
                 triggerKey: .rightOption,
                 selectionRouteKey: UInt16(kVK_ANSI_T),
@@ -161,6 +167,15 @@ final class CoreModel {
         storeRevisions[id, default: 0]
     }
 
+    // MARK: 版本更新
+
+    /// 立即检查更新；已是最新时返回 nil。
+    @discardableResult
+    func checkForUpdate() async throws -> AppRelease? {
+        update = try await core.checkForUpdate()
+        return update
+    }
+
     // MARK: core 推送
 
     fileprivate func apply(session: SessionState) {
@@ -179,6 +194,11 @@ final class CoreModel {
 
     fileprivate func storeChanged(_ id: String) {
         storeRevisions[id, default: 0] += 1
+    }
+
+    fileprivate func updateAvailable(_ release: AppRelease) {
+        update = release
+        onUpdateAvailable(release)
     }
 }
 
@@ -212,6 +232,10 @@ private final class ObserverBridge: CoreObserver, @unchecked Sendable {
         deliver { $0.reloadSettings() }
     }
 
+    func updateAvailable(release: AppRelease) {
+        deliver { $0.updateAvailable(release) }
+    }
+
     private func deliver(_ update: @escaping @MainActor (CoreModel) -> Void) {
         DispatchQueue.main.async {
             MainActor.assumeIsolated {
@@ -242,7 +266,7 @@ extension CoreError {
         switch self {
         case .InvalidManifest(let message), .InvalidInstruction(let message), .CapabilityNotGranted(let message),
              .ModelNotConfigured(let message), .InsertOutsideCommand(let message), .InvalidPackage(let message),
-             .Llm(let message), .Recognition(let message), .Platform(let message), .Io(let message):
+             .Llm(let message), .Recognition(let message), .Platform(let message), .Update(let message), .Io(let message):
             return message
         }
     }

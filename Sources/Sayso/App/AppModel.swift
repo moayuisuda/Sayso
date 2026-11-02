@@ -27,6 +27,7 @@ final class AppModel {
     let hotkeys = HotkeyMonitor()
     let navigation = SettingsNavigation()
     private let panel: CandidatePanel
+    private let updateNotifier = UpdateNotifier()
 
     init() {
         let platform = MacPlatform()
@@ -45,6 +46,7 @@ final class AppModel {
         let audioLevel = model.audioLevel
         platform.onLevel = { audioLevel.set($0) }
         model.onSessionChange = { [panel] in panel.update(for: $0) }
+        model.onUpdateAvailable = { [updateNotifier] in updateNotifier.notify($0) }
         hotkeys.isSessionActive = { core.isSessionActive() }
         hotkeys.candidateSurface = { [panel] timestamp in panel.dismissibleSurface(forEventAt: timestamp) }
         hotkeys.onAction = { action in
@@ -60,6 +62,7 @@ final class AppModel {
     }
 
     func launch() {
+        model.core.startUpdateChecks()
         Task {
             if !Permissions.microphoneGranted { _ = await Permissions.requestMicrophone() }
             if !Permissions.accessibilityGranted { Permissions.promptAccessibility() }

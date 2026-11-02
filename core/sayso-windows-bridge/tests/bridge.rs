@@ -17,7 +17,8 @@ impl Client {
     fn new(path: &std::path::Path) -> Self {
         let path = CString::new(path.to_str().unwrap()).unwrap();
         let mut handle = std::ptr::null_mut();
-        let result = unsafe { take(sayso_create(path.as_ptr(), callback, release, &mut handle)) };
+        let version = CString::new("0.0.0").unwrap();
+        let result = unsafe { take(sayso_create(path.as_ptr(), version.as_ptr(), callback, release, &mut handle)) };
         assert!(result.get("error").is_none(), "{result}");
         Self(handle)
     }

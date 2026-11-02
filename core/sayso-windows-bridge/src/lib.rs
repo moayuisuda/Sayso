@@ -12,7 +12,7 @@ use sayso_core::plugin::RunStatus;
 use sayso_core::protocol::{AppInfo, Delivery, Language};
 use sayso_core::session::SessionState;
 use sayso_core::settings::{Hotkey, PlatformDefaults, SecretSlot};
-use sayso_core::{Core, CoreObserver, Platform, PlatformError};
+use sayso_core::{AppRelease, Core, CoreObserver, Platform, PlatformError};
 use serde::de::DeserializeOwned;
 use serde_json::{json, Value};
 
@@ -141,6 +141,13 @@ impl CoreObserver for Host {
     fn settings_changed(&self) {
         self.notify("settingsChanged", Value::Null);
     }
+    fn update_available(&self, release: AppRelease) {
+        self.notify("updateAvailable", release_json(Some(release)));
+    }
+}
+
+fn release_json(release: Option<AppRelease>) -> Value {
+    release.map_or(Value::Null, |release| json!({"version":release.version,"url":release.url}))
 }
 
 pub struct Bridge {
@@ -195,6 +202,10 @@ impl Bridge {
             "secret" => Ok(json!(core.secret(SecretSlot::Llm{provider:decode(args)?}))),
             "setSecret" => { core.set_secret(SecretSlot::Llm{provider:decode(args["provider"].clone())?},text(&args,"value")?).map_err(|e|e.to_string())?; Ok(Value::Null) }
             "testLlm" => self.runtime.block_on(core.test_llm()).map(|v|json!(v)).map_err(|e|e.to_string()),
+            "appVersion" => Ok(json!(core.app_version())),
+            "availableUpdate" => Ok(release_json(core.available_update())),
+            "checkForUpdate" => self.runtime.block_on(core.check_for_update()).map(release_json).map_err(|e|e.to_string()),
+            "startUpdateChecks" => { core.start_update_checks(); Ok(Value::Null) }
             "extensions" => Ok(json!(core.extensions().into_iter().map(|e| {
                 let result=e.last_result.map(|r| {
                     let (status,message)=match r.status {
@@ -236,6 +247,7 @@ fn response(result: Result<Value, String>) -> *mut c_char {
 #[no_mangle]
 pub unsafe extern "C" fn sayso_create(
     directory: *const c_char,
+    version: *const c_char,
     callback: Callback,
     release: Release,
     output: *mut *mut Bridge,
@@ -244,6 +256,7 @@ pub unsafe extern "C" fn sayso_create(
         let host = Arc::new(Host { callback, release, next_request: AtomicU64::new(1), pending: Mutex::default() });
         let core = Core::new(
             CStr::from_ptr(directory).to_string_lossy().into_owned(),
+            CStr::from_ptr(version).to_string_lossy().into_owned(),
             PlatformDefaults {
                 trigger_key: Hotkey { key_code: 0xA3, modifiers: 0 },
                 selection_route_key: 0x54,

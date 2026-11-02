@@ -59,6 +59,10 @@ private struct MenuBarContent: View {
     var body: some View {
         let model = app.model
         let settings = model.settings
+        if let update = model.update, let url = URL(string: update.url) {
+            Button(L("新版本 \(update.version) 可下载…", "Download version \(update.version)…")) { NSWorkspace.shared.open(url) }
+            Divider()
+        }
         ForEach(model.enabledCommands) { command in
             if let route = model.route(of: command.key) {
                 Text("\(command.spec.title)：\(route.keycaps(trigger: settings.triggerKey).joined(separator: " "))")

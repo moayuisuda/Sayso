@@ -1,38 +1,40 @@
-// 示例扩展「Obsidian 记录」：翻译完毕后在候选框中显示「记到 Obsidian」按钮，点击后把这次翻译写成一张卡片，
-// 追加到 Obsidian 库中当天的笔记。演示订阅 `translated` hook、按钮回调 `action` 与 `sayso.fs`；
+// 示例扩展「Obsidian 记录」：在整句卡片与每张词条卡片上附加「记到 Obsidian」按钮，点击后写成一张卡片，
+// 追加到 Obsidian 库中当天的笔记。演示订阅 `translated` hook、`sayso.blocks.attach`、按钮回调 `action` 与 `sayso.fs`；
 // 直接写库中的 Markdown 文件，Obsidian 未打开时也能记录。
 //
 // 配置见同目录 config.json：
 // - vault：Obsidian 库的根目录，必须已存在（防止路径写错时在别处建出目录）。
 // - notePath：库内笔记路径，{date} 替换为当天日期 YYYY-MM-DD。
 //
-// 每次记录是一个 Obsidian callout 卡片，标题为时间与触发时的应用：
-// 语音翻译记下写入的整句，其中实际翻译的片段高亮，下方列出各片段的「译文 · 原文」；
+// 每次记录是一个 Obsidian callout 卡片，标题为时间与触发时的应用。
+// 整句卡片上的按钮记下整次翻译：混说翻译为写入的整句（翻译的片段高亮）与各片段的「译文 · 原文」，互译为原文与译文；
 //   > [!note] 14:32 · Notes
 //   > I have ==an apple== and ==bananas==.
 //   >
 //   > - ==an apple== · a 苹果
 //   > - ==bananas== · 香蕉
-// 划词翻译记下原文，下方是译文。
+// 词条卡片上的按钮只记这个词条，有整句时附上整句并高亮该词条：
+//   > [!note] 14:33 · Notes
+//   > ==an apple== · a 苹果
+//   >
+//   > I have ==an apple== and bananas.
 
 const chinese = sayso.languages.native.code === "zh";
-const BLOCK = "save";
+const label = chinese ? "记到 Obsidian" : "Save to Obsidian";
 
-/** 按钮载荷中带着整理好的卡片，点击时不再依赖本次事件。 */
+/** 按钮载荷中带着整理好的卡片，点击时不再依赖本次事件；同一词条的词对共用卡片，重复附加只会替换。 */
 export function translated(event) {
-  sayso.blocks.upsert({
-    id: BLOCK,
-    type: "status",
-    message: chinese ? "记到 Obsidian 当天的笔记" : "Save to today's Obsidian note",
-    icon: "square.and.pencil",
-    actions: [{
-      type: "invoke",
-      label: chinese ? "记到 Obsidian" : "Save to Obsidian",
-      payload: { body: cardBody(event), app: event.source?.name ?? null },
-    }],
-  });
+  const app = event.source?.name ?? null;
+  if (event.card) {
+    sayso.blocks.attach(event.card, [{ type: "invoke", label, payload: { body: translationBody(event), app } }]);
+  }
+  for (const pair of event.pairs) {
+    if (!pair.card) continue;
+    sayso.blocks.attach(pair.card, [{ type: "invoke", label, payload: { body: pairBody(pair, event.context), app } }]);
+  }
 }
 
+/** 点击附加的按钮时，`blockId` 是被附加的卡片引用。 */
 export function action(event) {
   const { body, app } = event.action.payload;
   const config = readConfig();
@@ -46,25 +48,25 @@ export function action(event) {
   // 卡片前留空行，与上一条记录或笔记中的其他内容分开，callout 才能独立渲染。
   sayso.fs.appendText(note, `\n${callout(title, body)}\n`);
 
-  // 同 id 替换，去掉按钮，避免重复记录。
-  sayso.blocks.upsert({
-    id: BLOCK,
-    type: "status",
-    message: chinese ? `已记录到 Obsidian · ${notePath}` : `Saved to Obsidian · ${notePath}`,
-    icon: "square.and.pencil",
-    tone: "success",
-  });
+  // 换成不可点击的完成状态，避免重复记录。
+  sayso.blocks.attach(event.action.blockId, [{ type: "invoke", label: chinese ? "已记到 Obsidian" : "Saved to Obsidian", disabled: true }]);
 }
 
-/** 卡片正文的各段：语音翻译为高亮后的整句与词对列表，划词翻译为原文与译文。 */
-function cardBody(event) {
+/** 整次翻译的正文：混说翻译为高亮后的整句与词对列表，互译为原文与译文。 */
+function translationBody(event) {
   if (event.input.via === "selection") return [event.input.text, event.output];
   const pairs = event.pairs.map((pair) => `- ==${pair.target}== · ${pair.native}`).join("\n");
-  return pairs ? [highlight(event.output, event.pairs), pairs] : [event.output];
+  return pairs ? [highlightAll(event.output, event.pairs), pairs] : [event.output];
 }
 
-/** 按顺序在整句中找到每个译文片段并高亮；找不到的片段只出现在下方列表中。 */
-function highlight(sentence, pairs) {
+/** 单个词条的正文：词对；有整句上下文时附上整句并高亮该词条。 */
+function pairBody(pair, context) {
+  const entry = `==${pair.target}== · ${pair.native}`;
+  return context ? [entry, highlightAll(context, [pair])] : [entry];
+}
+
+/** 按顺序在整句中找到每个译文片段并高亮；找不到的片段只出现在词对中。 */
+function highlightAll(sentence, pairs) {
   let result = "";
   let cursor = 0;
   for (const { target } of pairs) {

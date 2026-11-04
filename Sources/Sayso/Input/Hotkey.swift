@@ -2,10 +2,11 @@ import AppKit
 import Carbon.HIToolbox
 import SaysoCore
 
-/// 统一入口键。可以是单个修饰键（如右 Option），也可以是「修饰键 + 普通键」组合。
+/// 快捷键。可以是单个修饰键（如右 Option），也可以是「修饰键 + 普通键」组合。
 /// 键码与修饰位（`CGEventFlags` 中的标准修饰位）由 core 原样保存，这里提供 macOS 上的解释与显示。
 extension Hotkey {
     static let rightOption = Hotkey(keyCode: UInt16(kVK_RightOption), modifiers: 0)
+    static let optionT = Hotkey(keyCode: UInt16(kVK_ANSI_T), modifiers: CGEventFlags.maskAlternate.rawValue)
 
     static let standardModifierMask: CGEventFlags = [.maskCommand, .maskShift, .maskAlternate, .maskControl]
 
@@ -77,16 +78,6 @@ extension Hotkey {
             kVK_F16: 16, kVK_F17: 17, kVK_F18: 18, kVK_F19: 19, kVK_F20: 20,
         ]
         return map[Int(keyCode)]
-    }
-}
-
-extension RouteKey {
-    /// 完整按法的键帽：入口键在前，路由键在后。
-    func keycaps(trigger: Hotkey) -> [String] {
-        switch self {
-        case .direct: return trigger.keycaps
-        case .key(let code): return trigger.keycaps + [Hotkey.keyName(code)]
-        }
     }
 }
 

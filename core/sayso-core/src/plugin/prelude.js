@@ -11,6 +11,8 @@
     blocks: Object.freeze({
       upsert: (block) => emit("block.upsert", { block }),
       remove: (id) => emit("block.remove", { id }),
+      /** 在其他来源的块（如词对的 `card`）上附加本扩展的按钮，替换之前附加的那组；传空数组撤下。 */
+      attach: (block, actions) => emit("block.attach", { block, actions }),
     }),
     store: Object.freeze({
       put: (collection, key, record) => emit("store.put", { collection, key, record }),

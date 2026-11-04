@@ -2,7 +2,7 @@
   "schemaVersion": 4,
   "id": "com.sayso.example.favorites",
   "name": "收藏夹 / Favorites",
-  "description": "翻译出单词时显示收藏按钮，收藏的词显示在「收藏」页签 / Adds a Favorite button to translated words and lists them in a Favorites tab",
+  "description": "在翻译出的单词卡片上显示收藏按钮，收藏的词显示在「收藏」页签 / Adds a Favorite button to translated word cards and lists them in a Favorites tab",
   "main": "main.js",
   "timeoutSeconds": 5,
   "events": ["translated", "action"],

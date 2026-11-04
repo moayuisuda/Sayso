@@ -60,7 +60,7 @@ enum SelectionReader {
 
     private static func readViaCopy() async -> String {
         // 热键的修饰键还按着时发送 ⌘C，前台应用会收到 ⌘⌥⇧C 之类的组合（Chrome 中 ⌘⌥C 会打开检查元素），
-        // 因此等用户松开后再复制：按住入口键等结果时，一松手即读取。用户取消时 core 中止本次读取，不再复制。
+        // 因此等用户松开后再复制：按住快捷键等结果时，一松手即读取。用户取消时 core 中止本次读取，不再复制。
         while !CGEventSource.flagsState(.combinedSessionState).intersection(Hotkey.standardModifierMask).isEmpty {
             do {
                 try await Task.sleep(for: .milliseconds(20))

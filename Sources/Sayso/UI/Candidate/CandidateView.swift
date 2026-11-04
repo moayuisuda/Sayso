@@ -43,7 +43,7 @@ struct CandidateView: View {
         switch model.session {
         case .idle:
             EmptyView()
-        case .recording(let partial, _):
+        case .recording(let partial, _, _):
             // 跟随最新识别的文字，正在说的内容始终可见。
             CappedScrollView(maxHeight: MaxHeight.liveText, followValue: partial) {
                 Text(partial.isEmpty ? L("请说…", "Listening…") : partial)
@@ -66,11 +66,11 @@ struct CandidateView: View {
     /// 操作栏左侧：当前阶段。
     @ViewBuilder
     private var status: some View {
-        if case .recording(_, let commands) = model.session {
+        if case .recording(_, let command, _) = model.session {
             // 图标保持静态，录音中的动态只由流光承担（见 FlowingBorder）。窗口图层树内持续播放的动画
             // （如 symbolEffect）会让每帧提交同步等待窗口服务器，主队列长期得不到调度，
             // core 推送的会话状态随之积压，候选框卡在录音画面且无法关闭。
-            StatusLabel(([L("正在聆听", "Listening")] + commands).joined(separator: " · ")) {
+            StatusLabel("\(L("正在聆听", "Listening")) · \(command)") {
                 Image(systemName: "waveform")
                     .foregroundStyle(Theme.accentForeground)
             }
@@ -95,24 +95,35 @@ struct CandidateView: View {
         }
     }
 
-    /// 操作栏右侧：录音与处理中提示按键，展示结果时提供关闭按钮。
+    /// 操作栏右侧：录音与处理中提示按键；展示结果时为针对整次翻译的扩展按钮与关闭按钮。
     @ViewBuilder
     private var actions: some View {
         switch model.session {
         case .idle:
             EmptyView()
-        case .recording:
+        case .recording(_, _, let shortcut):
             KeyHint(
                 title: model.settings.hotkeyStyle == .hold ? L("松开结束", "Release to finish") : L("结束", "Finish"),
-                keys: model.settings.triggerKey.keycaps
+                keys: shortcut.keycaps
             )
             KeyHint(title: L("取消", "Cancel"), keys: ["esc"])
         case .processing:
             KeyHint(title: L("取消", "Cancel"), keys: ["esc"])
         case .presenting(let surface):
-            Button(L("关闭", "Close")) { model.core.dismissSurface(surfaceId: surface.id) }
-                .buttonStyle(.chip)
-                .help(L("按 Enter 关闭候选框", "Press Enter to close the panel"))
+            // 附加在整句卡片上的按钮在关闭左侧，放不下时向上换行、靠右对齐；优先占用状态以外的宽度。
+            FlowLayout(spacing: 6, alignment: .trailing) {
+                ForEach(Array(surface.footer.enumerated()), id: \.offset) { _, attachment in
+                    ForEach(Array(attachment.actions.enumerated()), id: \.offset) { _, action in
+                        ActionButton(action: action) {
+                            model.core.performCandidateAction(surfaceId: surface.id, sourceId: attachment.sourceId, blockId: attachment.blockRef, action: action)
+                        }
+                    }
+                }
+                Button(L("关闭", "Close")) { model.core.dismissSurface(surfaceId: surface.id) }
+                    .buttonStyle(.chip)
+                    .help(L("按 Enter 关闭候选框", "Press Enter to close the panel"))
+            }
+            .layoutPriority(1)
         }
     }
 }
@@ -151,9 +162,12 @@ private struct SurfaceContent: View {
                             .font(.system(size: 11, weight: .semibold))
                             .foregroundStyle(.secondary)
                     }
-                    ForEach(section.blocks, id: \.id) { block in
-                        BlockView(block: block, placement: .candidate) { action in
-                            core.performCandidateAction(surfaceId: surface.id, sourceId: section.sourceId, blockId: block.id, action: action)
+                    ForEach(section.blocks, id: \.block.id) { item in
+                        BlockView(block: item.block, placement: .candidate, attachments: item.attachments) { action in
+                            core.performCandidateAction(surfaceId: surface.id, sourceId: section.sourceId, blockId: item.block.id, action: action)
+                        } performAttached: { attachment, action in
+                            // 附加的按钮回调给附加方，块引用原样交回。
+                            core.performCandidateAction(surfaceId: surface.id, sourceId: attachment.sourceId, blockId: attachment.blockRef, action: action)
                         }
                     }
                 }

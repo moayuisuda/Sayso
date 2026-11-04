@@ -61,7 +61,7 @@ internal static class CandidateChecks
 
         async Task<string> Present()
         {
-            await core.Call("trigger", new JsonObject { ["kind"] = "direct" });
+            await core.Call("trigger", new JsonObject { ["keyCode"] = 0xA3, ["modifiers"] = 0 });
             var session = (await core.Call("session"))!;
             if (session["kind"]!.GetValue<string>() != "presenting") throw new Exception("Expected the missing-configuration candidate.");
             await Task.Delay(100);

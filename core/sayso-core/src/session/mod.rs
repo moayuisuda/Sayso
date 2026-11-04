@@ -1,8 +1,8 @@
-//! 输入会话：候选框的唯一状态源。入口键触发一个路由后，按路由的输入来源准备好文本，再交给路由上的命令：
-//! - 语音路由：录音 → 识别 → 交给命令 → 扩展输出块
-//! - 选区路由：读取选区 → 交给命令 → 扩展输出块
+//! 输入会话：候选框的唯一状态源。按下快捷键后，按其输入来源准备好文本，再交给快捷键对应的命令：
+//! - 语音：录音 → 识别 → 交给命令 → 扩展输出块
+//! - 选区：读取选区 → 交给命令 → 扩展输出块
 //!
-//! 按住入口键即开始为「直接」路由录音；之后按的语音路由键改变本次交给的命令，选区路由键则放弃录音、改为读取选区。
+//! 每个命令有自己的快捷键。录音中按了选区快捷键，就放弃录音、改为读取选区。
 
 mod action;
 mod dispatch;
@@ -14,14 +14,14 @@ use std::time::{Duration, Instant};
 
 pub(crate) use action::ActionContext;
 pub(crate) use surface::{failure_block, hold, Surface, APP_SOURCE};
-pub use surface::{SurfaceSection, SurfaceView};
+pub use surface::{Attachment, SurfaceBlock, SurfaceSection, SurfaceView};
 
 use crate::app::Inner;
 use crate::asr::{source, AsrConfig, PartialSink, Recognition};
 use crate::extensions::Route;
 use crate::l10n::tr;
 use crate::protocol::{AppInfo, CommandRef, Input, InputSource, Payload};
-use crate::settings::{CommandKey, RouteKey, Settings};
+use crate::settings::{CommandKey, Hotkey, Settings};
 
 /// 候选框自动隐藏的检查间隔。
 const DISMISS_CHECK: Duration = Duration::from_millis(250);
@@ -30,10 +30,13 @@ const DISMISS_CHECK: Duration = Duration::from_millis(250);
 #[derive(Clone, Debug, PartialEq, uniffi::Enum)]
 pub enum SessionState {
     Idle,
-    /// 录音中；`partial` 为实时识别文本，`commands` 为本次将交给的命令名。
+    /// 录音中；`partial` 为实时识别文本。
     Recording {
         partial: String,
-        commands: Vec<String>,
+        /// 本次命令的名称。
+        command: String,
+        /// 开始录音的快捷键，用于提示如何结束。
+        shortcut: Hotkey,
     },
     /// 识别或读取选区中。
     Processing {
@@ -69,15 +72,20 @@ impl Phase {
     }
 }
 
+/// 本次流程交给的命令：触发它的快捷键、命令及其名称。
+struct Triggered {
+    shortcut: Hotkey,
+    command: CommandKey,
+    title: String,
+}
+
 #[derive(Default)]
 pub(crate) struct Session {
     pub(crate) phase: Phase,
     /// 每次开始新流程递增，用于丢弃过期的异步回调。
     generation: u64,
-    /// 本次的路由。
-    routes: Vec<RouteKey>,
-    /// 本次路由上的命令名，录音时显示。
-    command_titles: Vec<String>,
+    /// 本次交给的命令及其名称（录音时显示），开始流程时设置。
+    command: Option<Triggered>,
     /// 触发本次流程时的前台应用，命令写入的目标。候选框不会成为前台窗口，因此触发时取得即可。
     source: Option<AppInfo>,
     recognition: Option<Recognition>,
@@ -95,7 +103,12 @@ impl Session {
         match &self.phase {
             Phase::Idle => SessionState::Idle,
             Phase::Recording { partial } => {
-                SessionState::Recording { partial: partial.clone(), commands: self.command_titles.clone() }
+                let triggered = self.command.as_ref().expect("a recording always starts with a command");
+                SessionState::Recording {
+                    partial: partial.clone(),
+                    command: triggered.title.clone(),
+                    shortcut: triggered.shortcut,
+                }
             }
             Phase::Processing { message } => SessionState::Processing { message: message.clone() },
             Phase::Presenting(surface) => SessionState::Presenting { surface: surface.view() },
@@ -107,8 +120,8 @@ impl Session {
 struct CommandInput {
     surface_id: String,
     input: Input,
-    /// 本次路由上的命令，在候选框出现时即已记为处理中。
-    commands: Vec<CommandKey>,
+    /// 本次的命令，在候选框出现时即已记为处理中。
+    command: CommandKey,
     source: Option<AppInfo>,
 }
 
@@ -121,51 +134,44 @@ impl Inner {
         result
     }
 
-    pub(crate) fn trigger(self: &Arc<Self>, key: RouteKey) {
+    pub(crate) fn trigger(self: &Arc<Self>, key: Hotkey) {
         let settings = self.settings();
-        let Some(route) = settings.route(key) else { return };
-        // 只按入口键而「直接」路由上没有命令时，可能只是在按别的快捷键，不打扰用户。
-        if self.extensions.read().unwrap().commands_routed_to(&settings, &[key]).is_empty() {
-            return;
-        }
+        // 快捷键的命令所属扩展未启用时不打扰用户。
+        let Some((shortcut, title)) = self.extensions.read().unwrap().command_for(&settings, key) else { return };
+        let command = Triggered { shortcut: key, command: shortcut.command.clone(), title };
         self.update_session(|session| {
-            log::info!("trigger {key:?} input={:?} phase={}", route.input, session.phase.label());
+            log::info!("trigger {key:?} input={:?} phase={}", shortcut.input, session.phase.label());
             if !settings.languages().is_valid() {
                 return self.present_failure(
                     session,
                     tr("目标语言与本地语言不能相同", "Target and native languages must differ"),
                 );
             }
-            match route.input {
-                InputSource::Speech => match session.phase {
-                    // 按了语音路由键：本次交给路由键上的命令，不再交给「直接」路由。
-                    Phase::Recording { .. } => {
-                        session.routes.retain(|existing| *existing != RouteKey::Direct && *existing != key);
-                        session.routes.push(key);
-                        session.command_titles = self.command_titles(&settings, &session.routes);
+            match shortcut.input {
+                InputSource::Speech => {
+                    if !session.is_active() {
+                        self.start_recording(session, command, &settings);
                     }
-                    _ if !session.is_active() => self.start_recording(session, key, &settings),
-                    _ => {}
-                },
+                }
                 InputSource::Selection => {
                     if matches!(session.phase, Phase::Recording { .. }) {
                         self.cancel_flow(session);
                     }
                     if !session.is_active() {
-                        self.read_selection(session, key);
+                        self.read_selection(session, command);
                     }
                 }
             }
         });
     }
 
-    pub(crate) fn toggle(self: &Arc<Self>, keys: Vec<RouteKey>) {
+    pub(crate) fn toggle(self: &Arc<Self>, key: Hotkey) {
         let recording = matches!(self.session.lock().unwrap().phase, Phase::Recording { .. });
-        if !recording {
-            return keys.into_iter().for_each(|key| self.trigger(key));
+        let speech = self.settings().shortcuts.get(&key).is_some_and(|shortcut| shortcut.input == InputSource::Speech);
+        if recording && speech {
+            return self.stop();
         }
-        keys.into_iter().filter(|key| *key != RouteKey::Direct).for_each(|key| self.trigger(key));
-        self.stop();
+        self.trigger(key);
     }
 
     /// 结束录音，等待识别结果后交给命令。
@@ -213,7 +219,7 @@ impl Inner {
                 }
             });
             if let Some(input) = input {
-                inner.invoke_commands(input);
+                inner.invoke_command(input);
             }
         });
     }
@@ -250,23 +256,13 @@ impl Inner {
 
     // MARK: 流程
 
-    /// 开始新流程：记下本次路由与前台应用，使旧流程的回调失效，停止上一次的朗读。
-    fn begin_flow(&self, session: &mut Session, key: RouteKey) -> u64 {
-        session.routes = vec![key];
-        session.command_titles = self.command_titles(&self.settings(), &session.routes);
+    /// 开始新流程：记下本次命令与前台应用，使旧流程的回调失效，停止上一次的朗读。
+    fn begin_flow(&self, session: &mut Session, command: Triggered) -> u64 {
+        session.command = Some(command);
         session.generation += 1;
         session.source = self.platform.frontmost_app();
         self.platform.stop_speaking();
         session.generation
-    }
-
-    fn command_titles(&self, settings: &Settings, routes: &[RouteKey]) -> Vec<String> {
-        let extensions = self.extensions.read().unwrap();
-        extensions
-            .enabled_commands(settings)
-            .filter(|(key, _)| settings.binding(key).is_some_and(|route| routes.contains(&route)))
-            .map(|(_, spec)| spec.title.clone())
-            .collect()
     }
 
     fn cancel_flow(&self, session: &mut Session) {
@@ -283,14 +279,14 @@ impl Inner {
         session.phase = Phase::Idle;
     }
 
-    fn start_recording(self: &Arc<Self>, session: &mut Session, key: RouteKey, settings: &Settings) {
+    fn start_recording(self: &Arc<Self>, session: &mut Session, command: Triggered, settings: &Settings) {
         let Some(config) = self.asr_config(settings) else {
             return self.present_failure(
                 session,
                 tr("请先在设置中配置语音识别服务", "Configure a speech recognition service in Settings first"),
             );
         };
-        let generation = self.begin_flow(session, key);
+        let generation = self.begin_flow(session, command);
         let weak = Arc::downgrade(self);
         let partial: PartialSink = Arc::new(move |text| {
             let Some(inner) = weak.upgrade() else { return };
@@ -320,8 +316,8 @@ impl Inner {
         *self.audio.lock().unwrap() = None;
     }
 
-    fn read_selection(self: &Arc<Self>, session: &mut Session, key: RouteKey) {
-        let generation = self.begin_flow(session, key);
+    fn read_selection(self: &Arc<Self>, session: &mut Session, command: Triggered) {
+        let generation = self.begin_flow(session, command);
         self.warm_up_translation();
         session.phase = Phase::Processing { message: tr("读取选中文本…", "Reading selection…") };
         let inner = self.clone();
@@ -339,7 +335,7 @@ impl Inner {
                 Some(inner.present_input(session, text, InputSource::Selection, hold::SELECTION))
             });
             if let Some(input) = input {
-                inner.invoke_commands(input);
+                inner.invoke_command(input);
             }
         });
         session.selection = Some(task.abort_handle());
@@ -354,28 +350,25 @@ impl Inner {
         via: InputSource,
         hold: Duration,
     ) -> CommandInput {
-        let commands = self.extensions.read().unwrap().commands_routed_to(&self.settings(), &session.routes);
+        let command = session.command.as_ref().expect("every flow starts with a command").command.clone();
         let mut surface = Surface::new(Some(text.clone()), hold);
-        surface.mark_running(commands.iter().map(|key| key.extension_id.clone()));
+        surface.mark_running([command.extension_id.clone()]);
         let surface_id = surface.id.clone();
         self.present(session, surface);
-        CommandInput { surface_id, input: Input { text, via }, commands, source: session.source.clone() }
+        CommandInput { surface_id, input: Input { text, via }, command, source: session.source.clone() }
     }
 
-    /// 把命令事件分别发给本次每个命令所属的扩展，各扩展并发处理；失败原因显示在候选框中。
-    /// 同时向订阅者广播 `input` hook。
-    fn invoke_commands(self: &Arc<Self>, command: CommandInput) {
+    /// 把命令事件发给命令所属的扩展，失败原因显示在候选框中；同时向订阅者广播 `input` hook。
+    fn invoke_command(self: &Arc<Self>, command: CommandInput) {
         let hook = Payload::Input { input: command.input.clone(), source: command.source.clone() };
         self.dispatch(hook, Some(&command.surface_id), Route::Republished { by: APP_SOURCE.into() });
-        for key in command.commands {
-            let payload = Payload::Command {
-                command: CommandRef { id: key.command_id },
-                input: command.input.clone(),
-                source: command.source.clone(),
-            };
-            let route = Route::Target { extension_id: key.extension_id, reports_failure: true };
-            self.dispatch(payload, Some(&command.surface_id), route);
-        }
+        let payload = Payload::Command {
+            command: CommandRef { id: command.command.command_id },
+            input: command.input,
+            source: command.source,
+        };
+        let route = Route::Target { extension_id: command.command.extension_id, reports_failure: true };
+        self.dispatch(payload, Some(&command.surface_id), route);
     }
 
     fn present_failure(self: &Arc<Self>, session: &mut Session, message: String) {

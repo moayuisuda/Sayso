@@ -104,22 +104,28 @@ internal sealed class CandidateWindow : Window
         // 单个无操作的状态块不需要标题栏、底栏或独立卡片。
         compact = sections is { Count: 1 } && sections[0]!["title"] is null &&
             sections[0]!["blocks"] is JsonArray { Count: 1 } notices &&
-            notices[0]!["type"]!.GetValue<string>() == "status" &&
-            (notices[0]!["actions"] is not JsonArray { Count: > 0 }) && session["working"]?.GetValue<bool>() != true;
+            notices[0]!["block"]!["type"]!.GetValue<string>() == "status" &&
+            (notices[0]!["block"]!["actions"] is not JsonArray { Count: > 0 }) &&
+            (notices[0]!["attachments"] is not JsonArray { Count: > 0 }) &&
+            (session["footer"] is not JsonArray { Count: > 0 }) && session["working"]?.GetValue<bool>() != true;
 
         if (sections is not null)
         {
             foreach (var section in sections)
             {
                 if (section!["title"]?.GetValue<string>() is { } title) blocks.Children.Add(Controls.Text(title, 11, 0.6));
-                foreach (var block in section["blocks"]!.AsArray())
+                foreach (var item in section["blocks"]!.AsArray())
                 {
-                    var actionBlock = block!;
-                    blocks.Children.Add(BlockRenderer.Render(actionBlock, action => Run("candidateAction", new JsonObject
+                    var block = item!["block"]!;
+                    void Perform(string source, string blockId, JsonNode action) => Run("candidateAction", new JsonObject
                     {
-                        ["surface"] = session["id"]!.GetValue<string>(), ["source"] = section["sourceId"]!.GetValue<string>(),
-                        ["block"] = actionBlock["id"]!.GetValue<string>(), ["action"] = action.DeepClone()
-                    }), localize, BlockRenderer.Placement.Candidate));
+                        ["surface"] = session["id"]!.GetValue<string>(), ["source"] = source, ["block"] = blockId, ["action"] = action.DeepClone()
+                    });
+                    blocks.Children.Add(BlockRenderer.Render(block,
+                        action => Perform(section["sourceId"]!.GetValue<string>(), block["id"]!.GetValue<string>(), action),
+                        localize, BlockRenderer.Placement.Candidate, item["attachments"]!.AsArray(),
+                        // 附加的按钮回调给附加方，块引用原样交回。
+                        (attachment, action) => Perform(attachment["sourceId"]!.GetValue<string>(), attachment["blockRef"]!.GetValue<string>(), action)));
                 }
             }
             if (blocks.Children.Count == 0 && session["placeholder"]?.GetValue<string>() is { } placeholder)
@@ -133,8 +139,7 @@ internal sealed class CandidateWindow : Window
             blocks.Children.Add(TranscriptText.Create(string.IsNullOrEmpty(text) ? placeholder : text));
             if (kind == "recording")
             {
-                var commands = session["commands"]!.AsArray().Select(command => command!.GetValue<string>());
-                var hint = string.Join(" · ", commands.Append(localize("Esc 取消", "Esc to cancel")));
+                var hint = session["command"]!.GetValue<string>() + " · " + localize("Esc 取消", "Esc to cancel");
                 blocks.Children.Add(Controls.Text(hint, 11, 0.6));
             }
         }
@@ -178,6 +183,23 @@ internal sealed class CandidateWindow : Window
             };
             var panel = Controls.Stack(header, scroll);
             panel.Spacing = 0;
+            // 底栏：附加在整句卡片上、针对整次翻译的扩展按钮，点击回调给附加方。
+            if (kind == "presenting" && session["footer"] is JsonArray { Count: > 0 } footer)
+            {
+                var bar = new WrapPanel { HorizontalAlignment = HorizontalAlignment.Right, Margin = new(14, 0, 14, 10) };
+                foreach (var attachment in footer)
+                {
+                    foreach (var action in attachment!["actions"]!.AsArray())
+                    {
+                        bar.Children.Add(BlockRenderer.ActionButton(action!, () => Run("candidateAction", new JsonObject
+                        {
+                            ["surface"] = session["id"]!.GetValue<string>(), ["source"] = attachment["sourceId"]!.GetValue<string>(),
+                            ["block"] = attachment["blockRef"]!.GetValue<string>(), ["action"] = action!.DeepClone()
+                        }), localize));
+                    }
+                }
+                panel.Children.Add(bar);
+            }
             root.Child = panel;
         }
         root.Width = compact ? NoticeWidth : ContentWidth;

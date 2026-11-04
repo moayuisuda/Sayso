@@ -48,7 +48,7 @@ fn settings_survive_native_handle_recreation_and_invalid_requests_remain_errors(
     {
         let client = Client::new(directory.path());
         let mut settings = client.call("settings", Value::Null);
-        assert_eq!(settings["triggerKey"]["keyCode"], 0xA3);
+        assert!(settings["shortcuts"].as_array().unwrap().iter().any(|s| s["key"]["keyCode"] == 0xA3));
         settings["targetLanguage"] = json!("ja");
         client.call("updateSettings", settings);
         for request in ["{", r#"{"method":"unknown"}"#, r#"{"method":"updateSettings","args":{}}"#] {
@@ -93,26 +93,25 @@ fn extension_package_roundtrip_preserves_code_and_updates_core_catalog() {
 }
 
 #[test]
-fn routing_commands_preserve_input_and_persist_across_the_abi() {
+fn shortcuts_preserve_input_and_persist_across_the_abi() {
     let directory = tempfile::tempdir().unwrap();
     let command = json!({"extensionId":"sayso.selection","commandId":"translate"});
-    let destination = json!({"kind":"key","code":89});
+    let destination = json!({"keyCode":89,"modifiers":1});
+    let input_at = |settings: &Value| {
+        settings["shortcuts"].as_array().unwrap().iter().find(|s| s["key"] == destination).map(|s| s["input"].clone())
+    };
     {
         let client = Client::new(directory.path());
-        let settings = client.call("bindCommand", json!({"command":command,"route":destination}));
-        let routes = settings["routes"].as_array().unwrap();
-        assert_eq!(routes.iter().find(|r| r["key"] == destination).unwrap()["input"], "selection");
-        assert!(!routes.iter().any(|r| r["key"]["code"] == 0x54));
-        assert_eq!(client.call("activeRouteKeys", Value::Null), json!([89]));
-        client.call("setRouteInput", json!({"route":destination,"input":"speech"}));
+        let settings = client.call("setShortcut", json!({"command":command,"key":destination}));
+        assert_eq!(input_at(&settings), Some(json!("selection")));
+        assert!(!settings["shortcuts"].as_array().unwrap().iter().any(|s| s["key"]["keyCode"] == 0x54));
+        let active = client.call("activeShortcuts", Value::Null);
+        assert!(active.as_array().unwrap().contains(&destination));
+        client.call("setShortcutInput", json!({"command":command,"input":"speech"}));
     }
     let client = Client::new(directory.path());
-    let settings = client.call("settings", Value::Null);
-    assert_eq!(
-        settings["routes"].as_array().unwrap().iter().find(|r| r["key"] == destination).unwrap()["input"],
-        "speech"
-    );
-    let settings = client.call("bindCommand", json!({"command":command,"route":null}));
-    assert!(!settings["routes"].as_array().unwrap().iter().any(|r| r["key"] == destination));
-    assert_eq!(client.call("activeRouteKeys", Value::Null), json!([]));
+    assert_eq!(input_at(&client.call("settings", Value::Null)), Some(json!("speech")));
+    let settings = client.call("setShortcut", json!({"command":command,"key":null}));
+    assert_eq!(input_at(&settings), None);
+    assert!(!client.call("activeShortcuts", Value::Null).as_array().unwrap().contains(&destination));
 }

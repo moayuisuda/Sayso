@@ -270,8 +270,8 @@ mod tests {
 
     fn settings(source: &str) -> Settings {
         let mut settings = Settings::defaults(PlatformDefaults {
-            trigger_key: Hotkey { key_code: 61, modifiers: 0 },
-            selection_route_key: 17,
+            speech_shortcut: Hotkey { key_code: 61, modifiers: 0 },
+            selection_shortcut: Hotkey { key_code: 17, modifiers: 0x80000 },
             speech_rate: 0.5,
         });
         settings.asr_source = source.into();

@@ -1,5 +1,5 @@
-// 内置扩展「划词翻译」：翻译输入的文字。本地语言译为目标语言，其他语言（目标语言或第三种语言）译为本地语言。
-// 涉及目标语言时朗读目标语言一侧；翻译完毕后广播 translated hook，第三种语言的词对为空。
+// 内置扩展「互译」：翻译输入的文字。本地语言译为目标语言，其他语言（目标语言或第三种语言）译为本地语言。
+// 涉及目标语言时朗读目标语言一侧；翻译完毕后广播 translated hook，Sayso 为词对画出词条卡片，第三种语言的词对为空。
 
 const { target, native } = sayso.languages;
 const chinese = native.code === "zh";
@@ -19,13 +19,14 @@ export async function command(event) {
   sayso.blocks.upsert(textBlock("translation", translation, "primary", to));
   sayso.blocks.upsert(textBlock("original", text, "secondary", from));
 
-  // 统一成「目标语言 · 本地语言」词对，与语音翻译的结果同一形式。第三种语言不是在学的语言，不朗读也没有词对。
+  // 统一成「目标语言 · 本地语言」词对，与混说翻译的结果同一形式。第三种语言不是在学的语言，不朗读也没有词对。
   const pair =
     from === target.code ? { target: text, native: translation }
     : from === native.code ? { target: translation, native: text }
     : null;
   if (pair !== null) sayso.speak(pair.target, target.code);
-  sayso.publish({ type: "translated", output: translation, pairs: pair === null ? [] : [pair], context: null });
+  // 译文块是整次翻译的卡片，订阅者可在上面附加按钮。
+  sayso.publish({ type: "translated", output: translation, pairs: pair === null ? [] : [pair], context: null, card: "translation" });
 }
 
 function systemPrompt() {
@@ -59,7 +60,7 @@ function parse(reply) {
   return { translation, from: payload.from };
 }
 
-/** 译文为主文本，原文为次要文本，目标语言一侧带朗读操作。词条由生词本扩展提供。 */
+/** 译文为主文本，原文为次要文本，目标语言一侧带朗读操作。词条卡片由 Sayso 按广播的词对画出。 */
 function textBlock(id, text, role, language) {
   const actions = language === target.code ? [{ id: "speak", type: "speak", text, language }] : [];
   return { id, type: "text", role, runs: [{ text }], actions };

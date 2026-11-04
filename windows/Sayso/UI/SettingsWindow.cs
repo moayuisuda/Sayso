@@ -113,7 +113,7 @@ internal sealed partial class SettingsWindow : Window
         appVersion = (await core.Call("appVersion"))!.GetValue<string>();
         Update = await core.Call("availableUpdate");
         Hotkeys!.Settings = Settings;
-        await UpdateActiveRoutes();
+        await UpdateActiveShortcuts();
         BuildTabs();
         await Navigate("general");
         UpdateStatus();
@@ -124,7 +124,7 @@ internal sealed partial class SettingsWindow : Window
         var previousLanguage = Settings["nativeLanguage"]!.GetValue<string>();
         Settings = (await core!.Call("settings"))!;
         Hotkeys!.Settings = Settings;
-        await UpdateActiveRoutes();
+        await UpdateActiveShortcuts();
         UpdateStatus();
         if (previousLanguage != Settings["nativeLanguage"]!.GetValue<string>())
         {
@@ -139,7 +139,7 @@ internal sealed partial class SettingsWindow : Window
     internal async Task ReloadExtensions()
     {
         extensions = (await core!.Call("extensions"))!.AsArray();
-        await UpdateActiveRoutes();
+        await UpdateActiveShortcuts();
         BuildTabs();
         if (selected == "extensions" || selected.StartsWith("sayso.") || extensions.Any(e => e!["manifest"]!["id"]!.GetValue<string>() == selected)) await Navigate(selected);
     }
@@ -154,8 +154,9 @@ internal sealed partial class SettingsWindow : Window
     internal void OpenUpdate() { if (Update is { } update) WindowsPlatform.Open(update["url"]!.GetValue<string>()); }
 
     internal void RefreshStore(string id) { if (selected == id) Run(() => Navigate(id)); }
-    private async Task UpdateActiveRoutes() => Hotkeys!.ActiveRouteKeys = (await core!.Call("activeRouteKeys"))!.AsArray().Select(key => key!.GetValue<uint>()).ToHashSet();
-    private void UpdateStatus() => status.Text = L("按住", "Hold") + " " + HotkeyMonitor.KeyName(Settings["triggerKey"]!["keyCode"]!.GetValue<uint>(), Settings["triggerKey"]!["modifiers"]!.GetValue<ulong>()) + " · " + L("说话即可输入，Esc 取消 · 关闭窗口后驻留系统托盘", "Speak to type · Esc to cancel · Closing keeps Sayso in the tray");
+    private async Task UpdateActiveShortcuts() => Hotkeys!.ActiveShortcuts = (await core!.Call("activeShortcuts"))!.AsArray()
+        .Select(key => (key!["keyCode"]!.GetValue<uint>(), key["modifiers"]!.GetValue<ulong>())).ToHashSet();
+    private void UpdateStatus() => status.Text = L("按快捷键开始输入，Esc 取消 · 关闭窗口后驻留系统托盘", "Press a shortcut to start · Esc to cancel · Closing keeps Sayso in the tray");
 
     internal async Task Save(string field, JsonNode? value)
     {

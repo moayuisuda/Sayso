@@ -4,35 +4,52 @@ using Windows.Foundation;
 
 namespace Sayso.UI;
 
-/// <summary>按按钮的实际宽度换行，供候选框与扩展页签共用。</summary>
+/// <summary>按子元素的实际宽度换行，同一行内垂直居中，供候选框与扩展页签共用。</summary>
 internal sealed class WrapPanel : Panel
 {
     private const double Gap = 6;
+
     protected override Size MeasureOverride(Size availableSize)
     {
-        double x = 0, y = 0, height = 0, width = 0;
-        foreach (var child in Children)
-        {
-            child.Measure(availableSize);
-            var size = child.DesiredSize;
-            if (x > 0 && x + size.Width > availableSize.Width) { y += height + Gap; x = 0; height = 0; }
-            x += size.Width + Gap;
-            width = Math.Max(width, x - Gap);
-            height = Math.Max(height, size.Height);
-        }
-        return new Size(width, y + height);
+        foreach (var child in Children) child.Measure(availableSize);
+        var rows = Rows(availableSize.Width);
+        var width = rows.Count == 0 ? 0 : rows.Max(row => row.Width);
+        return new Size(width, rows.Sum(row => row.Height) + Gap * Math.Max(rows.Count - 1, 0));
     }
+
     protected override Size ArrangeOverride(Size finalSize)
     {
-        double x = 0, y = 0, height = 0;
+        double y = 0;
+        foreach (var row in Rows(finalSize.Width))
+        {
+            double x = 0;
+            foreach (var child in row.Children)
+            {
+                var size = child.DesiredSize;
+                child.Arrange(new Rect(x, y + (row.Height - size.Height) / 2, size.Width, size.Height));
+                x += size.Width + Gap;
+            }
+            y += row.Height + Gap;
+        }
+        return finalSize;
+    }
+
+    /// <summary>按已测量的尺寸分行：放不下的子元素换到下一行。</summary>
+    private List<(List<UIElement> Children, double Width, double Height)> Rows(double maxWidth)
+    {
+        var rows = new List<(List<UIElement> Children, double Width, double Height)>();
         foreach (var child in Children)
         {
             var size = child.DesiredSize;
-            if (x > 0 && x + size.Width > finalSize.Width) { y += height + Gap; x = 0; height = 0; }
-            child.Arrange(new Rect(x, y, size.Width, size.Height));
-            x += size.Width + Gap;
-            height = Math.Max(height, size.Height);
+            if (rows.Count == 0 || rows[^1].Width + Gap + size.Width > maxWidth)
+            {
+                rows.Add((new List<UIElement> { child }, size.Width, size.Height));
+                continue;
+            }
+            var row = rows[^1];
+            row.Children.Add(child);
+            rows[^1] = (row.Children, row.Width + Gap + size.Width, Math.Max(row.Height, size.Height));
         }
-        return finalSize;
+        return rows;
     }
 }

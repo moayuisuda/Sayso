@@ -119,10 +119,10 @@ impl Platform for Host {
 fn session_json(state: SessionState) -> Value {
     match state {
         SessionState::Idle => json!({"kind":"idle"}),
-        SessionState::Recording { partial, commands } => json!({"kind":"recording","text":partial,"commands":commands}),
+        SessionState::Recording { partial, command, .. } => json!({"kind":"recording","text":partial,"command":command}),
         SessionState::Processing { message } => json!({"kind":"processing","text":message}),
         SessionState::Presenting { surface } => {
-            json!({"kind":"presenting","id":surface.id,"placeholder":surface.placeholder,"working":surface.working,
+            json!({"kind":"presenting","id":surface.id,"placeholder":surface.placeholder,"working":surface.working,"footer":surface.footer,
             "sections":surface.sections.into_iter().map(|s| json!({"sourceId":s.source_id,"title":s.title,"blocks":s.blocks})).collect::<Vec<_>>() })
         }
     }
@@ -169,16 +169,16 @@ impl Bridge {
         match method {
             "settings" => Ok(json!(core.settings())),
             "updateSettings" => { core.update_settings(decode(args)?).map_err(|e| e.to_string())?; Ok(json!(core.settings())) }
-            "bindCommand" => {
-                core.bind_command(decode(args["command"].clone())?, decode(args["route"].clone())?).map_err(|e| e.to_string())?;
+            "setShortcut" => {
+                core.set_shortcut(decode(args["command"].clone())?, decode(args["key"].clone())?).map_err(|e| e.to_string())?;
                 Ok(json!(core.settings()))
             }
-            "setRouteInput" => {
-                core.set_route_input(decode(args["route"].clone())?, decode(args["input"].clone())?).map_err(|e| e.to_string())?;
+            "setShortcutInput" => {
+                core.set_shortcut_input(decode(args["command"].clone())?, decode(args["input"].clone())?).map_err(|e| e.to_string())?;
                 Ok(json!(core.settings()))
             }
             "session" => Ok(session_json(core.session_state())),
-            "activeRouteKeys" => Ok(json!(core.active_route_keys())),
+            "activeShortcuts" => Ok(json!(core.active_shortcuts())),
             "trigger" => { core.trigger(decode(args)?); Ok(Value::Null) }
             "toggle" => { core.toggle(decode(args)?); Ok(Value::Null) }
             "stop" => { core.stop(); Ok(Value::Null) }
@@ -213,7 +213,7 @@ impl Bridge {
                     };
                     json!({"status":status,"message":message,"warnings":r.warnings,"log":r.log})
                 });
-                json!({"manifest":e.manifest,"builtIn":e.built_in,"enabled":e.enabled,"permissions":e.permission_summary,"lastResult":result})
+                json!({"manifest":e.manifest,"builtIn":e.built_in,"enabled":e.enabled,"permissions":e.permission_summary,"listens":e.listens,"emits":e.emits,"lastResult":result})
             }).collect::<Vec<_>>())),
             "extensionProblems" => Ok(json!(core.extension_problems().into_iter().map(|p|json!({"directory":p.directory_name,"reason":p.reason})).collect::<Vec<_>>())),
             "extensionsDirectory" => Ok(json!(core.extensions_directory())),
@@ -258,8 +258,8 @@ pub unsafe extern "C" fn sayso_create(
             CStr::from_ptr(directory).to_string_lossy().into_owned(),
             CStr::from_ptr(version).to_string_lossy().into_owned(),
             PlatformDefaults {
-                trigger_key: Hotkey { key_code: 0xA3, modifiers: 0 },
-                selection_route_key: 0x54,
+                speech_shortcut: Hotkey { key_code: 0xA3, modifiers: 0 },
+                selection_shortcut: Hotkey { key_code: 0x54, modifiers: 1 },
                 speech_rate: 0.5,
             },
             host.clone(),

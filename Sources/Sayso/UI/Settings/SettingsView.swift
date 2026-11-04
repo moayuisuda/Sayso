@@ -43,7 +43,7 @@ struct SettingsView: View {
         case .models:
             ModelSettingsView(model: model)
         case .extensions:
-            ExtensionsSettingsView(model: model, packages: app.packages, hotkeys: app.hotkeys)
+            ExtensionsSettingsView(model: model, packages: app.packages)
         case .extension(let id):
             if let manifest = model.tabExtensions.first(where: { $0.manifest.id == id })?.manifest, let tab = manifest.tab {
                 ExtensionTabView(model: model, manifest: manifest, tab: tab)

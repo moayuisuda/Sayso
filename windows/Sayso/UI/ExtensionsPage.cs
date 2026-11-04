@@ -68,29 +68,7 @@ internal sealed partial class SettingsWindow
         var heading = Controls.Text(manifest["name"]!.GetValue<string>(), 18);
         heading.FontWeight = Microsoft.UI.Text.FontWeights.SemiBold;
         var sections = new List<UIElement> { Controls.Stack(heading, Controls.Text(manifest["description"]?.GetValue<string>() ?? "", 12, 0.7), toggle) };
-        var commands = new List<UIElement>();
-        foreach (var command in manifest["commands"]!.AsArray())
-        {
-            var commandId = command!["id"]!.GetValue<string>();
-            var binding = Settings["commandBindings"]!.AsArray().FirstOrDefault(b => b!["command"]!["extensionId"]!.GetValue<string>() == id && b["command"]!["commandId"]!.GetValue<string>() == commandId);
-            var route = binding?["route"];
-            var current = route is null ? "none" : route["kind"]!.GetValue<string>() == "direct" ? "direct" : route["code"]!.GetValue<int>().ToString();
-            var options = new List<(string, string)> { ("none", L("未分配", "Unassigned")), ("direct", L("直接", "Direct")) };
-            options.AddRange(Enumerable.Range(65, 26).Select(code => (code.ToString(), HotkeyMonitor.KeyName((uint)code))));
-            var choice = Controls.Choice(options, current, value => Run(async () => { await BindCommand(id, commandId, value); await Navigate("extensions"); }));
-            var row = Controls.Stack(Controls.Text(command["title"]!.GetValue<string>(), 12), choice);
-            if (route is not null)
-            {
-                var routeSettings = Settings["routes"]!.AsArray().First(r => JsonNode.DeepEquals(r!["key"], route))!;
-                row.Children.Add(Controls.Choice([("speech", L("语音输入", "Speech")), ("selection", L("选中文本", "Selected text"))], routeSettings["input"]!.GetValue<string>(), value => Run(async () =>
-                {
-                    Settings = (await core!.Call("setRouteInput", new JsonObject { ["route"] = route.DeepClone(), ["input"] = value }))!;
-                    Hotkeys!.Settings = Settings;
-                })));
-            }
-            commands.Add(row);
-        }
-        if (commands.Count > 0) sections.Add(Controls.Section(L("命令与路由", "Commands and routes"), commands.ToArray()));
+        if (ExtensionFlow(info) is { } flow) sections.Add(flow);
         sections.Add(Controls.Section(L("事件与能力", "Events and capabilities"), Controls.Text(info["permissions"]!.GetValue<string>(), 12, 0.75)));
         if (info["lastResult"] is { } result)
         {
@@ -112,20 +90,43 @@ internal sealed partial class SettingsWindow
         return Task.FromResult<UIElement>(Controls.Page(sections.ToArray()));
     }
 
-    private async Task BindCommand(string extension, string command, string selectedRoute)
+    /// 扩展的运行关系图：左边是触发它的快捷键与 hook，右边是它运行后引出的 hook 及接着运行的扩展。
+    /// 只画确实连着的关系，哪一边没有就不画哪一边，两边都没有时整张图都不画。
+    private UIElement? ExtensionFlow(JsonNode info)
     {
-        // UI 仅将选项转换为平台键码，绑定与路由修改由核心完成。
-        JsonObject? route = selectedRoute switch
-        {
-            "none" => null,
-            "direct" => new() { ["kind"] = "direct" },
-            _ => new() { ["kind"] = "key", ["code"] = int.Parse(selectedRoute) }
-        };
-        Settings = (await core!.Call("bindCommand", new JsonObject
-        {
-            ["command"] = new JsonObject { ["extensionId"] = extension, ["commandId"] = command }, ["route"] = route
-        }))!;
-        Hotkeys!.Settings = Settings;
+        var manifest = info["manifest"]!;
+        var id = manifest["id"]!.GetValue<string>();
+        var sources = manifest["commands"]!.AsArray().Select(command => CommandNode(id, command!)).OfType<UIElement>()
+            .Concat(info["listens"]!.AsArray().Select(link => HookNode(link!))).ToList();
+        var targets = info["emits"]!.AsArray().Select(link => HookNode(link!)).ToList();
+        if (sources.Count == 0 && targets.Count == 0) return null;
+        var hub = new Border { Width = 40, Height = 40, CornerRadius = new(10), Background = Controls.Brush("SaysoSelection"), Child = new FontIcon { Glyph = "\uEA86", FontSize = 20, Foreground = Controls.Brush("SaysoAccentText") } };
+        var flow = FlowDiagram.Create(L("什么会触发它", "What triggers it"), sources, hub, L("它会触发什么", "What it triggers"), targets);
+        flow.Opacity = info["enabled"]!.GetValue<bool>() ? 1 : 0.5;
+        return flow;
+    }
+
+    /// 命令节点：快捷键、命令名与输入来源；没有快捷键的命令不会被触发，没有节点。
+    private UIElement? CommandNode(string extension, JsonNode command)
+    {
+        var commandId = command["id"]!.GetValue<string>();
+        var shortcut = Settings["shortcuts"]!.AsArray().FirstOrDefault(s => s!["command"]!["extensionId"]!.GetValue<string>() == extension && s["command"]!["commandId"]!.GetValue<string>() == commandId);
+        if (shortcut is null) return null;
+        var key = shortcut["key"]!;
+        var input = shortcut["input"]!.GetValue<string>() == "speech" ? L("语音输入", "Speech") : L("选中文本", "Selected text");
+        return FlowContent(HotkeyMonitor.KeyName(key["keyCode"]!.GetValue<uint>(), key["modifiers"]!.GetValue<ulong>()), command["title"]!.GetValue<string>(), L("输入：", "Input: ") + input);
+    }
+
+    /// hook 节点：hook 名、何时发生，以及另一端的扩展。
+    private static UIElement HookNode(JsonNode link) =>
+        FlowContent(link["event"]!.GetValue<string>(), link["description"]!.GetValue<string>(), link["relation"]?.GetValue<string>());
+
+    private static StackPanel FlowContent(string label, string title, string? caption)
+    {
+        var content = Controls.Stack(Controls.Text(label, 11, 0.65), Controls.Text(title, 12));
+        if (caption is not null) content.Children.Add(Controls.Text(caption, 11, 0.6));
+        content.Spacing = 4;
+        return content;
     }
 
     private async Task ChoosePackage()

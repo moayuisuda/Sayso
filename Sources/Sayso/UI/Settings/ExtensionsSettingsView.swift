@@ -2,11 +2,10 @@ import AppKit
 import SwiftUI
 import SaysoCore
 
-/// 扩展管理：左侧为扩展列表，右侧为所选扩展的启停、命令快捷键、事件与能力、最近一次执行状态。
+/// 扩展管理：左侧为扩展列表，右侧为所选扩展的启停、运行关系图、能力、最近一次执行状态。命令的快捷键在「通用」页设置。
 struct ExtensionsSettingsView: View {
     let model: CoreModel
     let packages: ExtensionPackageManager
-    let hotkeys: HotkeyMonitor
 
     @State private var selectedID: String?
     /// 等待用户确认能力后启用的外部扩展。
@@ -23,7 +22,7 @@ struct ExtensionsSettingsView: View {
                 .frame(width: 260)
             Divider()
             if let selected {
-                ExtensionDetail(info: selected, model: model, packages: packages, hotkeys: hotkeys) { enable in
+                ExtensionDetail(info: selected, model: model, packages: packages) { enable in
                     if enable, !selected.builtIn {
                         pendingApproval = selected
                     } else {
@@ -162,7 +161,6 @@ private struct ExtensionDetail: View {
     let info: ExtensionInfo
     let model: CoreModel
     let packages: ExtensionPackageManager
-    let hotkeys: HotkeyMonitor
     let setEnabled: (Bool) -> Void
 
     @State private var confirmingDeletion = false
@@ -174,27 +172,7 @@ private struct ExtensionDetail: View {
             VStack(alignment: .leading, spacing: 24) {
                 header
 
-                if !manifest.commands.isEmpty {
-                    SettingsSection(L("命令", "Commands")) {
-                        ForEach(manifest.commands, id: \.id) { command in
-                            CommandRow(
-                                command: command,
-                                key: CommandKey(extensionId: manifest.id, commandId: command.id),
-                                model: model,
-                                hotkeys: hotkeys
-                            )
-                        }
-                    }
-                    .disabled(!info.enabled)
-                }
-
-                if !manifest.events.isEmpty {
-                    SettingsSection(L("事件", "Events")) {
-                        FlowLayout(spacing: 6) {
-                            ForEach(manifest.events, id: \.self) { Tag(text: eventName(event: $0)) }
-                        }
-                    }
-                }
+                ExtensionFlow(info: info, model: model)
 
                 SettingsSection(L("能力", "Capabilities")) {
                     if manifest.capabilities.isEmpty {
@@ -265,61 +243,81 @@ private struct ExtensionDetail: View {
     }
 }
 
-/// 命令及其路由（可清除）与路由的输入来源。同一路由上的命令同时触发，收到同一份输入。
-private struct CommandRow: View {
-    let command: CommandSpec
-    let key: CommandKey
+/// 扩展的运行关系图：左边是触发它的快捷键与 hook，右边是它运行后引出的 hook 及接着运行的扩展。
+/// 只画确实连着的关系，哪一边没有就不画哪一边，两边都没有时整张图都不画。
+private struct ExtensionFlow: View {
+    let info: ExtensionInfo
     let model: CoreModel
-    let hotkeys: HotkeyMonitor
 
-    private var route: RouteKey? { model.route(of: key) }
+    private var manifest: Manifest { info.manifest }
 
-    var body: some View {
-        VStack(alignment: .leading, spacing: 6) {
-            HStack(spacing: 8) {
-                Text(command.title)
-                Spacer(minLength: 12)
-                if let route, let input = model.input(of: route) {
-                    Picker(L("输入", "Input"), selection: Binding(get: { input }, set: { model.setInput($0, of: route) })) {
-                        ForEach(InputSource.allCases) { Text($0.displayName).tag($0) }
-                    }
-                    .labelsHidden()
-                    .fixedSize()
-                    .help(L("该路由上的命令收到的输入", "Input that commands on this route receive"))
-                }
-                RouteRecorder(
-                    route: Binding(get: { route }, set: { model.setRoute($0, of: key) }),
-                    trigger: model.settings.triggerKey,
-                    monitor: hotkeys
-                )
-                if route != nil {
-                    Button {
-                        model.setRoute(nil, of: key)
-                    } label: {
-                        Image(systemName: "xmark")
-                    }
-                    .buttonStyle(.chip)
-                    .help(L("清除", "Clear"))
-                }
-            }
-            let shared = sharedCommands
-            if !shared.isEmpty {
-                Label(L("与「\(names(shared))」同时触发", "Triggers together with “\(names(shared))”"), systemImage: "link")
-                    .font(.system(size: 11))
-                    .foregroundStyle(.secondary)
-            }
+    /// 设了快捷键的命令；没有快捷键的命令不会被触发。
+    private var triggers: [(command: CommandSpec, shortcut: (key: Hotkey, input: InputSource))] {
+        manifest.commands.compactMap { command in
+            model.shortcut(of: CommandKey(extensionId: manifest.id, commandId: command.id)).map { (command, $0) }
         }
     }
 
-    /// 已启用的其他命令中，与本命令路由相同的。
-    private var sharedCommands: [EnabledCommand] {
-        guard let route else { return [] }
-        return model.enabledCommands.filter { $0.key != key && model.route(of: $0.key) == route }
+    var body: some View {
+        let triggers = triggers
+        let hasSources = !triggers.isEmpty || !info.listens.isEmpty
+        let hasTargets = !info.emits.isEmpty
+        if hasSources || hasTargets {
+            FlowDiagram(
+                sourcesTitle: hasSources ? L("什么会触发它", "What triggers it") : nil,
+                targetsTitle: hasTargets ? L("它会触发什么", "What it triggers") : nil
+            ) {
+                ForEach(triggers, id: \.command.id) { trigger in
+                    FlowNode(side: .source) { CommandNode(command: trigger.command, shortcut: trigger.shortcut) }
+                }
+                ForEach(info.listens, id: \.event) { link in
+                    FlowNode(side: .source) { HookNode(link: link) }
+                }
+            } hub: {
+                ExtensionIcon(info: info, size: 40)
+            } targets: {
+                ForEach(info.emits, id: \.event) { link in
+                    FlowNode(side: .target) { HookNode(link: link) }
+                }
+            }
+            .opacity(info.enabled ? 1 : 0.5)
+        }
     }
+}
 
-    /// 「扩展名 · 命令名」列表。
-    private func names(_ commands: [EnabledCommand]) -> String {
-        commands.map { "\($0.extensionName) · \($0.spec.title)" }.joined(separator: L("、", ", "))
+/// 命令节点：快捷键、命令名与输入来源。
+private struct CommandNode: View {
+    let command: CommandSpec
+    let shortcut: (key: Hotkey, input: InputSource)
+
+    var body: some View {
+        KeycapRow(keys: shortcut.key.keycaps)
+        Text(command.title).font(.system(size: 12))
+        FlowCaption(text: L("输入：\(shortcut.input.displayName)", "Input: \(shortcut.input.displayName)"))
+    }
+}
+
+/// hook 节点：hook 名、何时发生，以及另一端的扩展。
+private struct HookNode: View {
+    let link: HookLink
+
+    var body: some View {
+        Tag(text: eventName(event: link.event))
+        Text(link.description).font(.system(size: 12))
+        if let relation = link.relation {
+            FlowCaption(text: relation)
+        }
+    }
+}
+
+private struct FlowCaption: View {
+    let text: String
+
+    var body: some View {
+        Text(text)
+            .font(.system(size: 11))
+            .foregroundStyle(.secondary)
+            .fixedSize(horizontal: false, vertical: true)
     }
 }
 

@@ -51,17 +51,10 @@ struct GeneralSettingsView: View {
                 }
             }
 
-            SettingsSection(L("快捷键", "Shortcut")) {
-                SettingsRow(
-                    title: L("开始输入", "Start input"),
-                    caption: L("所有命令的统一入口。按住说话，交给「直接」路由的命令（默认语音翻译）；按住期间按命令的路由键（如 T），改为交给该命令。路由键在「扩展」页设置。",
-                               "The single entry for every command. Hold and speak to reach Direct commands (Speech Translate by default); press a command's route key (such as T) while holding to reach that command instead. Set route keys on the Extensions page.")
-                ) {
-                    HotkeyRecorder(hotkey: model.binding(\.triggerKey), monitor: hotkeys)
-                }
+            SettingsSection(L("快捷键", "Shortcuts")) {
                 SettingsRow(
                     title: L("触发方式", "Mode"),
-                    caption: L("录音或识别过程中按 Esc 取消。", "Press Esc to cancel while recording or recognizing.")
+                    caption: L("语音快捷键的用法。录音或识别过程中按 Esc 取消。", "How speech shortcuts work. Press Esc to cancel while recording or recognizing.")
                 ) {
                     Picker(L("触发方式", "Mode"), selection: model.binding(\.hotkeyStyle)) {
                         ForEach(HotkeyStyle.allCases) { Text($0.displayName).tag($0) }
@@ -69,6 +62,9 @@ struct GeneralSettingsView: View {
                     .pickerStyle(.segmented)
                     .labelsHidden()
                     .fixedSize()
+                }
+                ForEach(model.enabledCommands) { command in
+                    ShortcutRow(command: command, model: model, hotkeys: hotkeys)
                 }
             }
 
@@ -149,6 +145,40 @@ struct GeneralSettingsView: View {
         }
         .labelsHidden()
         .fixedSize()
+    }
+}
+
+/// 命令的快捷键（单修饰键或组合键，可清除）与命令收到的输入。一个快捷键只对应一个命令：设成其他命令的快捷键时，那个命令的快捷键被清除。
+private struct ShortcutRow: View {
+    let command: EnabledCommand
+    let model: CoreModel
+    let hotkeys: HotkeyMonitor
+
+    var body: some View {
+        let shortcut = model.shortcut(of: command.key)
+        SettingsRow(title: command.spec.title, caption: command.extensionName) {
+            HStack(spacing: 8) {
+                HotkeyRecorder(
+                    hotkey: Binding(get: { shortcut?.key }, set: { model.setShortcut($0, of: command.key) }),
+                    monitor: hotkeys
+                )
+                if let shortcut {
+                    Picker(L("输入", "Input"), selection: Binding(get: { shortcut.input }, set: { model.setInput($0, of: command.key) })) {
+                        ForEach(InputSource.allCases) { Text($0.displayName).tag($0) }
+                    }
+                    .labelsHidden()
+                    .fixedSize()
+                    .help(L("命令收到的输入", "Input the command receives"))
+                    Button {
+                        model.setShortcut(nil, of: command.key)
+                    } label: {
+                        Image(systemName: "xmark")
+                    }
+                    .buttonStyle(.chip)
+                    .help(L("清除", "Clear"))
+                }
+            }
+        }
     }
 }
 

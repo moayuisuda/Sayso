@@ -16,7 +16,7 @@ use crate::platform::{CoreObserver, Platform};
 use crate::plugin::CatalogProblem;
 use crate::protocol::{Block, BlockAction, InputSource, Manifest};
 use crate::session::{ActionContext, Session, SessionState};
-use crate::settings::{self, CommandKey, PlatformDefaults, RouteKey, SecretSlot, Secrets, Settings};
+use crate::settings::{self, CommandKey, Hotkey, PlatformDefaults, SecretSlot, Secrets, Settings};
 use crate::store::{StoreWrite, Stores};
 use crate::update::{self, AppRelease};
 
@@ -175,19 +175,19 @@ impl Core {
 
     // MARK: 输入会话
 
-    /// 触发一个路由：按路由的输入来源开始录音或读取选区。
-    pub fn trigger(&self, route: RouteKey) {
-        self.inner.trigger(route);
+    /// 按下快捷键：按其输入来源开始录音或读取选区。
+    pub fn trigger(&self, key: Hotkey) {
+        self.inner.trigger(key);
     }
 
-    /// 按住模式松开入口键：结束录音。
+    /// 按住模式松开语音快捷键：结束录音。
     pub fn stop(&self) {
         self.inner.stop();
     }
 
-    /// 按一下模式：未开始则触发这些路由；录音中则先加上新的路由键，再结束录音。
-    pub fn toggle(&self, routes: Vec<RouteKey>) {
-        self.inner.toggle(routes);
+    /// 按一下模式按下快捷键：录音中按语音快捷键结束录音，否则与 `trigger` 相同。
+    pub fn toggle(&self, key: Hotkey) {
+        self.inner.toggle(key);
     }
 
     pub fn cancel(&self) {
@@ -256,14 +256,14 @@ impl Core {
         self.inner.modify_settings(|current| *current = settings.normalized(current))
     }
 
-    /// 原子修改命令绑定：继承输入来源、保留共享路由、清理不再使用的路由，然后落盘并通知宿主。
-    pub fn bind_command(&self, command: CommandKey, route: Option<RouteKey>) -> Result<(), CoreError> {
-        self.inner.modify_settings(|settings| settings.bind_command(command, route))
+    /// 设置命令的快捷键（`None` 为移除），然后落盘并通知宿主。规则见 `Settings::set_shortcut`。
+    pub fn set_shortcut(&self, command: CommandKey, key: Option<Hotkey>) -> Result<(), CoreError> {
+        self.inner.modify_settings(|settings| settings.set_shortcut(command, key))
     }
 
-    /// 修改已存在路由的共享输入来源。
-    pub fn set_route_input(&self, route: RouteKey, input: InputSource) -> Result<(), CoreError> {
-        self.inner.modify_settings(|settings| settings.set_route_input(route, input))
+    /// 修改命令快捷键的输入来源。
+    pub fn set_shortcut_input(&self, command: CommandKey, input: InputSource) -> Result<(), CoreError> {
+        self.inner.modify_settings(|settings| settings.set_shortcut_input(&command, input))
     }
 
     pub fn secret(&self, slot: SecretSlot) -> String {
@@ -305,20 +305,11 @@ impl Core {
         })
     }
 
-    /// 需要监听的路由键：绑定了已启用命令的路由。
-    pub fn active_route_keys(&self) -> Vec<u16> {
+    /// 需要监听的快捷键：触发已启用命令的快捷键。
+    pub fn active_shortcuts(&self) -> Vec<Hotkey> {
         let settings = self.inner.settings();
         let extensions = self.inner.extensions.read().unwrap();
-        settings
-            .routes
-            .iter()
-            .filter_map(|route| match route.key {
-                RouteKey::Key { code } if !extensions.commands_routed_to(&settings, &[route.key]).is_empty() => {
-                    Some(code)
-                }
-                _ => None,
-            })
-            .collect()
+        settings.shortcuts.keys().filter(|key| extensions.command_for(&settings, **key).is_some()).copied().collect()
     }
 
     /// 翻译模型的必填项是否齐全。

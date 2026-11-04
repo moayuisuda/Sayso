@@ -4,7 +4,7 @@ use sayso_core::error::CoreError;
 use sayso_core::llm::Endpoint;
 use sayso_core::plugin::{built_in_plugins, run, Host, Instruction, RunStatus};
 use sayso_core::protocol::{
-    BlockContent, CommandRef, Delivery, Event, Input, InputSource, LanguagePair, Payload, Translation,
+    BlockContent, CommandRef, Delivery, Event, Input, InputSource, LanguagePair, Payload, Translation, TranslationPair,
 };
 use sayso_core::settings::{llm_endpoint, SecretSlot, Secrets, Settings};
 use sayso_core::store::StoreRecord;
@@ -92,18 +92,27 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         let started = std::time::Instant::now();
         let result = run(plugin, &event, host.clone()).await;
         let published = host.instructions.lock().unwrap().iter().find_map(|instruction| match instruction {
-            Instruction::PublishTranslated { output, pairs, context } => Some((output.clone(), pairs.clone(), context.clone())),
+            Instruction::PublishTranslated { output, pairs, context, .. } => Some((output.clone(), pairs.clone(), context.clone())),
             _ => None,
         });
-        if let Some((output, pairs, context)) = published {
+        // 回放没有候选框：仿照 Sayso 广播时的做法为词对填上卡片引用，生词本才会在卡片上附加按钮。
+        let pairs: Vec<TranslationPair> = published.as_ref().map_or_else(Vec::new, |(_, pairs, _)| {
+            pairs
+                .iter()
+                .enumerate()
+                .map(|(index, pair)| TranslationPair { card: Some(format!("sayso.dictation/term-{index}")), ..pair.clone() })
+                .collect()
+        });
+        if let Some((output, _, context)) = published {
             let translation = Event::new(
                 case.languages,
                 None,
                 Payload::Translated(Translation {
                     input: Input { text: case.transcript.clone(), via: InputSource::Speech },
                     output,
-                    pairs,
+                    pairs: pairs.clone(),
                     context,
+                    card: None,
                     source: None,
                 }),
             );
@@ -133,12 +142,15 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             })
             .flatten()
             .collect();
-        let terms: Vec<_> = blocks
+        // 生词本附加了按钮的词条。
+        let terms: Vec<_> = pairs
             .iter()
-            .filter_map(|block| match &block.content {
-                BlockContent::Term { term, .. } => Some(term.clone()),
-                _ => None,
+            .filter(|pair| {
+                instructions.iter().any(|instruction| {
+                    matches!(instruction, Instruction::AttachActions { block, .. } if pair.card.as_ref() == Some(block))
+                })
             })
+            .map(|pair| pair.target.clone())
             .collect();
         if !highlights.is_empty() && terms.is_empty() {
             failed = true;

@@ -85,13 +85,16 @@ pub struct TextRun {
     pub action: Option<String>,
 }
 
-/// 块上的可点击操作。JSON 为扁平结构：`{"type", "id"?, "label"?, …类型字段}`。
+/// 块上的可点击操作。JSON 为扁平结构：`{"type", "id"?, "label"?, "disabled"?, …类型字段}`。
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize, uniffi::Record)]
 pub struct BlockAction {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub id: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub label: Option<String>,
+    /// 按钮显示为不可点击，用于展示已完成的状态（如「已加入生词本」）。
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub disabled: bool,
     #[serde(flatten)]
     pub kind: ActionKind,
 }
@@ -133,6 +136,18 @@ impl BlockAction {
             | ActionKind::Invoke { .. } => None,
         }
     }
+
+    /// 输出一组操作需要的能力：块能力加上各操作所需的能力。
+    pub fn capabilities_for(actions: &[BlockAction]) -> Vec<Capability> {
+        let mut capabilities = vec![Capability::Blocks];
+        capabilities.extend(actions.iter().filter_map(BlockAction::required_capability));
+        capabilities
+    }
+
+    /// 是否有等待用户点击的扩展回调按钮。
+    pub fn any_pending_invoke(actions: &[BlockAction]) -> bool {
+        actions.iter().any(|action| !action.disabled && matches!(action.kind, ActionKind::Invoke { .. }))
+    }
 }
 
 impl Block {
@@ -146,13 +161,11 @@ impl Block {
 
     /// 输出该块需要扩展声明的能力，包括块上操作所需的能力。
     pub fn required_capabilities(&self) -> Vec<Capability> {
-        let mut capabilities = vec![Capability::Blocks];
-        capabilities.extend(self.actions.iter().filter_map(BlockAction::required_capability));
-        capabilities
+        BlockAction::capabilities_for(&self.actions)
     }
 
     pub fn has_pending_invoke(&self) -> bool {
-        self.actions.iter().any(|action| matches!(action.kind, ActionKind::Invoke { .. }))
+        BlockAction::any_pending_invoke(&self.actions)
     }
 
     pub fn has_highlight(&self) -> bool {

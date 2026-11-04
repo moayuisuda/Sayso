@@ -1,4 +1,4 @@
-//! 输入会话的端到端行为：用测试平台与本地 HTTP 识别服务驱动 `Core`，断言路由、写入与候选框内容。
+//! 输入会话的端到端行为：用测试平台与本地 HTTP 识别服务驱动 `Core`，断言快捷键触发、写入与候选框内容。
 
 use std::io::{Read, Write};
 use std::net::{SocketAddr, TcpListener, TcpStream};
@@ -8,13 +8,16 @@ use std::time::{Duration, Instant};
 
 use async_trait::async_trait;
 use sayso_core::asr::source::OPENAI_COMPATIBLE;
-use sayso_core::protocol::{ActionKind, AppInfo, BlockAction, BlockContent, Delivery, InputSource, Language};
-use sayso_core::session::{SessionState, SurfaceView};
 use sayso_core::llm::LlmProvider;
-use sayso_core::settings::{CommandKey, Hotkey, PlatformDefaults, RouteKey, SecretSlot};
+use sayso_core::protocol::{
+    ActionKind, AppInfo, BlockAction, BlockContent, Delivery, EventType, InputSource, Language,
+};
+use sayso_core::session::{SessionState, SurfaceView};
+use sayso_core::settings::{CommandKey, Hotkey, PlatformDefaults, SecretSlot};
 use sayso_core::{AppRelease, Core, CoreObserver, Platform, PlatformError};
 
-const SELECTION_KEY: u16 = 17;
+const SPEECH: Hotkey = Hotkey { key_code: 61, modifiers: 0 };
+const SELECTION: Hotkey = Hotkey { key_code: 17, modifiers: 0x80000 };
 
 #[derive(Default)]
 struct FakePlatform {
@@ -193,14 +196,26 @@ fn fixture(selection: Option<&str>) -> (tempfile::TempDir, Core, Arc<FakePlatfor
         )],
     );
 
+    // 第三方后处理扩展：没有默认快捷键，由测试设置。
+    install(
+        "glossary",
+        r#"{"schemaVersion":4,"id":"test.glossary","name":"Glossary","main":"main.js","events":["command"],
+            "capabilities":["blocks","publish"],"commands":[{"id":"lookup","title":"Look up"}]}"#,
+        &[(
+            "main.js",
+            r#"export function command(event) {
+                 sayso.blocks.upsert({ id: "gloss", type: "text", runs: [{ text: "释义" }] });
+                 sayso.publish({ type: "translated", output: "释义", pairs: [{ target: event.input.text, native: "释义" }], card: "gloss" });
+               }"#,
+        )],
+    );
+
     let platform = Arc::new(FakePlatform { selection: selection.map(Into::into), ..Default::default() });
     let observer = Arc::new(RecordingObserver::default());
-    let defaults = PlatformDefaults {
-        trigger_key: Hotkey { key_code: 61, modifiers: 0 },
-        selection_route_key: SELECTION_KEY,
-        speech_rate: 0.5,
-    };
-    let core = Core::new(data.path().to_string_lossy().into(), "0.0.0".into(), defaults, platform.clone(), observer.clone()).unwrap();
+    let defaults = PlatformDefaults { speech_shortcut: SPEECH, selection_shortcut: SELECTION, speech_rate: 0.5 };
+    let core =
+        Core::new(data.path().to_string_lossy().into(), "0.0.0".into(), defaults, platform.clone(), observer.clone())
+            .unwrap();
     let core = Arc::try_unwrap(core).ok().unwrap();
 
     let mut settings = core.settings();
@@ -209,7 +224,7 @@ fn fixture(selection: Option<&str>) -> (tempfile::TempDir, Core, Arc<FakePlatfor
         OPENAI_COMPATIBLE.into(),
         [("baseUrl".into(), format!("http://{}/v1", server.address)), ("model".into(), "local-test".into())].into(),
     );
-    settings.enabled_extensions.push("test.echo".into());
+    settings.enabled_extensions.extend(["test.echo".into(), "test.glossary".into()]);
     core.update_settings(settings).unwrap();
     (data, core, platform, observer, server)
 }
@@ -228,31 +243,37 @@ fn wait_for_surface(core: &Core, condition: impl Fn(&SurfaceView) -> bool) -> Su
     }
 }
 
+fn translate(extension_id: &str) -> CommandKey {
+    CommandKey { extension_id: extension_id.into(), command_id: "translate".into() }
+}
+
 fn block_ids(surface: &SurfaceView, source: &str) -> Vec<String> {
     surface
         .sections
         .iter()
         .filter(|section| section.source_id == source)
-        .flat_map(|section| section.blocks.iter().map(|block| block.id.clone()))
+        .flat_map(|section| section.blocks.iter().map(|item| item.block.id.clone()))
         .collect()
 }
 
 fn status_message(surface: &SurfaceView, source: &str) -> String {
     let section = surface.sections.iter().find(|section| section.source_id == source).expect("section exists");
-    let BlockContent::Status { message, .. } = &section.blocks[0].content else { panic!("expected status block") };
+    let BlockContent::Status { message, .. } = &section.blocks[0].block.content else {
+        panic!("expected status block")
+    };
     message.clone()
 }
 
-/// 直接路由：录音 → 本地 HTTP 服务 → 语音翻译。没有配置翻译模型时原样写入触发时的前台应用，并提示原因。
+/// 语音快捷键：录音 → 本地 HTTP 服务 → 混说翻译。没有配置翻译模型时原样写入触发时的前台应用，并提示原因。
 #[test]
 fn speech_flow_inserts_transcript_into_the_triggering_app() {
     let (_data, core, platform, observer, server) = fixture(Some(""));
 
-    core.trigger(RouteKey::Direct);
+    core.trigger(SPEECH);
     assert_eq!(
         core.session_state(),
         SessionState::Recording {
-            partial: String::new(), commands: vec!["翻译并输入 / Translate and type".into()]
+            partial: String::new(), command: "语音输入 / Voice input".into(), shortcut: SPEECH
         }
     );
     core.push_audio(vec![0; 16000]);
@@ -280,7 +301,7 @@ fn speech_flow_inserts_transcript_into_the_triggering_app() {
 fn speech_flow_reports_the_real_insertion_error_and_keeps_the_transcript() {
     let (_data, core, platform, _, _server) = fixture(Some(""));
     *platform.insert_error.lock().unwrap() = Some("Clipboard snapshot failed".into());
-    core.trigger(RouteKey::Direct);
+    core.trigger(SPEECH);
     core.push_audio(vec![0; 16000]);
     core.stop();
 
@@ -289,9 +310,9 @@ fn speech_flow_reports_the_real_insertion_error_and_keeps_the_transcript() {
     assert_eq!(block_ids(&surface, "sayso.dictation"), ["text", "insertion", "notice"]);
     assert!(platform.inserted.lock().unwrap().is_empty());
     let blocks = &surface.sections.iter().find(|section| section.source_id == "sayso.dictation").unwrap().blocks;
-    let BlockContent::Text { runs, .. } = &blocks[0].content else { panic!("expected retained transcript") };
+    let BlockContent::Text { runs, .. } = &blocks[0].block.content else { panic!("expected retained transcript") };
     assert_eq!(runs.iter().map(|run| run.text.as_str()).collect::<String>(), "I have a 苹果.");
-    let BlockContent::Status { message, .. } = &blocks[1].content else { panic!("expected insertion error") };
+    let BlockContent::Status { message, .. } = &blocks[1].block.content else { panic!("expected insertion error") };
     assert!(message.contains("Clipboard snapshot failed"));
 }
 
@@ -299,7 +320,7 @@ fn speech_flow_reports_the_real_insertion_error_and_keeps_the_transcript() {
 #[test]
 fn panel_dismissal_ignores_stale_ids_and_never_cancels_recording_or_processing() {
     let (_data, core, platform, observer, _server) = fixture(Some("괜찮아"));
-    core.trigger(RouteKey::Key { code: SELECTION_KEY });
+    core.trigger(SELECTION);
     let first = wait_for_surface(&core, |surface| !surface.working);
     let updates = observer.states.lock().unwrap().len();
     core.set_hovering(true);
@@ -307,14 +328,14 @@ fn panel_dismissal_ignores_stale_ids_and_never_cancels_recording_or_processing()
     core.dismiss_surface(first.id.clone());
     assert_eq!(core.session_state(), SessionState::Idle);
 
-    core.trigger(RouteKey::Key { code: SELECTION_KEY });
+    core.trigger(SELECTION);
     let second = wait_for_surface(&core, |surface| !surface.working);
     assert_ne!(first.id, second.id);
     let updates = observer.states.lock().unwrap().len();
     core.dismiss_surface(first.id);
     assert_eq!(observer.states.lock().unwrap().len(), updates, "stale dismissals must not publish state");
     assert!(matches!(core.session_state(), SessionState::Presenting { surface } if surface.id == second.id));
-    core.trigger(RouteKey::Direct);
+    core.trigger(SPEECH);
     core.dismiss_surface(second.id.clone());
     assert!(matches!(core.session_state(), SessionState::Recording { .. }));
     assert_eq!(platform.audio_stops.load(Ordering::SeqCst), 0);
@@ -322,29 +343,27 @@ fn panel_dismissal_ignores_stale_ids_and_never_cancels_recording_or_processing()
 
     // 未完成的选区读取保证停在 Processing，覆盖迟到的鼠标事件与 Enter。
     let (_data, processing, _, _, _server) = fixture(None);
-    processing.trigger(RouteKey::Key { code: SELECTION_KEY });
+    processing.trigger(SELECTION);
     processing.dismiss_surface(second.id);
     assert!(matches!(processing.session_state(), SessionState::Processing { .. }));
     processing.cancel();
 }
 
-/// 录音中按语音路由键：本次只交给该路由的命令，不再交给「直接」路由。
+/// 按一下模式：录音中再按语音快捷键结束录音，本次仍交给开始录音的命令。
 #[test]
-fn speech_route_key_redirects_the_recording() {
-    let (_data, core, platform, _, _server) = fixture(Some(""));
+fn toggling_a_speech_shortcut_stops_the_recording() {
+    let (_data, core, _, _, _server) = fixture(Some(""));
 
-    core.set_route_input(RouteKey::Key { code: SELECTION_KEY }, InputSource::Speech).unwrap();
-    core.trigger(RouteKey::Direct);
-    core.trigger(RouteKey::Key { code: SELECTION_KEY });
-    assert!(matches!(core.session_state(), SessionState::Recording { commands, .. }
-        if commands == ["翻译文字 / Translate text"]));
+    core.set_shortcut_input(translate("sayso.selection"), InputSource::Speech).unwrap();
+    core.toggle(SPEECH);
+    assert!(matches!(core.session_state(), SessionState::Recording { command, .. }
+        if command == "语音输入 / Voice input"));
     core.push_audio(vec![0; 16000]);
-    core.stop();
+    core.toggle(SELECTION);
 
-    let surface = wait_for_surface(&core, |surface| !block_ids(surface, "test.echo").is_empty());
+    let surface = wait_for_surface(&core, |surface| !block_ids(surface, "sayso.dictation").is_empty());
     assert_eq!(status_message(&surface, "test.echo"), "speech: I have a 苹果.");
-    assert!(block_ids(&surface, "sayso.dictation").is_empty());
-    assert!(platform.inserted.lock().unwrap().is_empty());
+    assert!(block_ids(&surface, "sayso.selection").is_empty());
 }
 
 /// 播放失败应保留原文并提示；自动朗读和按钮共用同一通知，成功重试清除通知。
@@ -352,7 +371,7 @@ fn speech_route_key_redirects_the_recording() {
 fn speech_failure_preserves_content_and_retry_clears_the_notice() {
     let (_data, core, platform, _, _server) = fixture(Some("괜찮아"));
     *platform.speech_error.lock().unwrap() = Some("ko-KR voice is not installed".into());
-    core.trigger(RouteKey::Key { code: SELECTION_KEY });
+    core.trigger(SELECTION);
     let surface = wait_for_surface(&core, |surface| {
         !surface.working && block_ids(surface, "sayso.app").contains(&"speech".to_string())
     });
@@ -367,6 +386,7 @@ fn speech_failure_preserves_content_and_retry_clears_the_notice() {
             BlockAction {
                 id: None,
                 label: None,
+                disabled: false,
                 kind: ActionKind::Speak { text: "괜찮아".into(), language: Language::Korean },
             },
         )
@@ -381,7 +401,7 @@ fn speech_failure_preserves_content_and_retry_clears_the_notice() {
     assert_eq!(status_message(&recovered, "test.echo"), "selection: 괜찮아");
 
     let attempts = platform.spoken.lock().unwrap().len();
-    core.trigger(RouteKey::Direct);
+    core.trigger(SPEECH);
     play();
     assert_eq!(platform.spoken.lock().unwrap().len(), attempts, "stale buttons must not play during recording");
     core.cancel();
@@ -412,6 +432,7 @@ fn speech_failure_from_a_tab_starts_the_normal_dismiss_timer() {
         BlockAction {
             id: None,
             label: None,
+            disabled: false,
             kind: ActionKind::Speak { text: "괜찮아".into(), language: Language::Korean },
         },
     );
@@ -429,19 +450,19 @@ fn speech_failure_from_a_tab_starts_the_normal_dismiss_timer() {
     assert!(left.elapsed() >= Duration::from_secs(3), "leaving the surface must reset its full hold time");
 }
 
-/// 录音中按选区路由键：放弃录音，改为读取选区交给划词翻译；翻译失败的原因显示在候选框中。
+/// 录音中按选区快捷键：放弃录音，改为读取选区交给互译；翻译失败的原因显示在候选框中。
 #[test]
-fn selection_route_key_abandons_recording_and_reads_selection() {
+fn selection_shortcut_abandons_recording_and_reads_selection() {
     let (_data, core, platform, _, _server) = fixture(Some("serendipity"));
 
-    core.trigger(RouteKey::Direct);
-    core.trigger(RouteKey::Key { code: SELECTION_KEY });
+    core.trigger(SPEECH);
+    core.trigger(SELECTION);
     assert_eq!(platform.audio_stops.load(Ordering::SeqCst), 1);
 
     let surface = wait_for_surface(&core, |surface| !block_ids(surface, "sayso.app").is_empty());
     assert_eq!(surface.placeholder.as_deref(), Some("serendipity"));
     let message = status_message(&surface, "sayso.app");
-    assert!(message.contains("划词翻译") && message.contains("未配置翻译模型"), "{message}");
+    assert!(message.contains("互译") && message.contains("未配置翻译模型"), "{message}");
     assert!(platform.inserted.lock().unwrap().is_empty());
 }
 
@@ -458,7 +479,7 @@ fn cancelling_aborts_a_pending_selection_read() {
         }
     };
 
-    core.trigger(RouteKey::Key { code: SELECTION_KEY });
+    core.trigger(SELECTION);
     assert!(matches!(core.session_state(), SessionState::Processing { .. }));
     wait_until(&platform.selection_reads_started, "selection read did not start");
     core.cancel();
@@ -468,30 +489,30 @@ fn cancelling_aborts_a_pending_selection_read() {
 }
 
 #[test]
-fn concurrent_route_edits_preserve_both_commands_and_persist() {
+fn concurrent_shortcut_edits_preserve_both_commands_and_persist() {
     let (data, core, _, _, _server) = fixture(Some(""));
     let barrier = std::sync::Barrier::new(2);
-    let speech = CommandKey { extension_id: "sayso.dictation".into(), command_id: "translate".into() };
-    let selection = CommandKey { extension_id: "sayso.selection".into(), command_id: "translate".into() };
-    let speech_route = RouteKey::Key { code: 89 };
-    let selection_route = RouteKey::Key { code: 90 };
+    let speech = translate("sayso.dictation");
+    let selection = translate("sayso.selection");
+    let speech_key = Hotkey { key_code: 89, modifiers: 0 };
+    let selection_key = Hotkey { key_code: 90, modifiers: 0 };
     std::thread::scope(|scope| {
         scope.spawn(|| {
             barrier.wait();
-            core.bind_command(speech.clone(), Some(speech_route)).unwrap();
+            core.set_shortcut(speech.clone(), Some(speech_key)).unwrap();
         });
         scope.spawn(|| {
             barrier.wait();
-            core.bind_command(selection.clone(), Some(selection_route)).unwrap();
+            core.set_shortcut(selection.clone(), Some(selection_key)).unwrap();
         });
     });
 
-    core.set_route_input(speech_route, InputSource::Selection).unwrap();
+    core.set_shortcut_input(speech.clone(), InputSource::Selection).unwrap();
     let settings = core.settings();
-    assert_eq!(settings.binding(&speech), Some(speech_route));
-    assert_eq!(settings.binding(&selection), Some(selection_route));
-    assert_eq!(settings.route(speech_route).unwrap().input, InputSource::Selection);
-    assert_eq!(settings.route(selection_route).unwrap().input, InputSource::Selection);
+    assert_eq!(settings.shortcut_of(&speech), Some(speech_key));
+    assert_eq!(settings.shortcut_of(&selection), Some(selection_key));
+    assert_eq!(settings.shortcuts[&speech_key].input, InputSource::Selection);
+    assert_eq!(settings.shortcuts[&selection_key].input, InputSource::Selection);
     assert_eq!(settings.asr_source, OPENAI_COMPATIBLE);
     let persisted = serde_json::from_slice::<sayso_core::settings::Settings>(
         &std::fs::read(data.path().join("settings.json")).unwrap(),
@@ -515,4 +536,43 @@ fn secrets_persist_to_config_file_and_clear_on_empty() {
     core.set_secret(slot.clone(), "".into()).unwrap();
     assert_eq!(core.secret(slot), "");
     assert!(read().get("llm.openai").is_none());
+}
+
+/// 第三方后处理扩展绑上快捷键后与内置翻译一样：广播的词对由 Sayso 画成词条卡片，生词本照常附加按钮。
+#[test]
+fn third_party_trigger_publishes_translations_like_built_ins() {
+    let (_data, core, _, _, _server) = fixture(Some("serendipity"));
+    let lookup = CommandKey { extension_id: "test.glossary".into(), command_id: "lookup".into() };
+    let key = Hotkey { key_code: 50, modifiers: 0 };
+    core.set_shortcut(lookup.clone(), Some(key)).unwrap();
+    core.set_shortcut_input(lookup, InputSource::Selection).unwrap();
+    assert!(core.active_shortcuts().contains(&key));
+
+    core.trigger(key);
+    let surface = wait_for_surface(&core, |surface| !surface.working);
+    let section = surface.sections.iter().find(|section| section.source_id == "test.glossary").unwrap();
+    let card = section.blocks.iter().find(|item| item.block.id == "@term-0").expect("Sayso draws the term card");
+    assert_eq!(card.attachments[0].source_id, "sayso.wordbook");
+    assert_eq!(card.attachments[0].block_ref, "test.glossary/@term-0");
+    assert_eq!(surface.footer.len(), 0, "a single pair offers no add-all button");
+}
+
+/// 扩展管理页的串联关系：广播 translated 的扩展与订阅它的扩展互相可见，没有扩展订阅的 inserted 不算关系。
+#[test]
+fn extensions_show_which_hooks_link_them() {
+    let (_data, core, _, _, _server) = fixture(None);
+    let info = |id: &str| core.extensions().into_iter().find(|info| info.manifest.id == id).unwrap();
+    let names = |links: &[sayso_core::extensions::HookLink], event| {
+        links.iter().find(|link| link.event == event).map(|link| link.extensions.clone()).unwrap_or_default()
+    };
+
+    let dictation = info("sayso.dictation");
+    assert_eq!(dictation.emits.iter().map(|link| link.event).collect::<Vec<_>>(), [EventType::Translated]);
+    assert_eq!(names(&dictation.emits, EventType::Translated), ["生词本 / Wordbook"]);
+    let wordbook = info("sayso.wordbook");
+    let sources = names(&wordbook.listens, EventType::Translated);
+    assert!(["混说翻译 / Mixed-language Translation", "互译 / Two-way Translation", "Glossary"]
+        .iter()
+        .all(|name| sources.contains(&name.to_string())));
+    assert!(wordbook.emits.is_empty());
 }

@@ -64,8 +64,8 @@ private struct MenuBarContent: View {
             Divider()
         }
         ForEach(model.enabledCommands) { command in
-            if let route = model.route(of: command.key) {
-                Text("\(command.spec.title)：\(route.keycaps(trigger: settings.triggerKey).joined(separator: " "))")
+            if let shortcut = model.shortcut(of: command.key) {
+                Text("\(command.spec.title)：\(shortcut.key.displayName)")
             }
         }
         Text("\(name(settings.targetLanguage)) ← \(name(settings.nativeLanguage))")

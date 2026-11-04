@@ -8,8 +8,9 @@ use async_trait::async_trait;
 use sayso_core::error::CoreError;
 use sayso_core::plugin::{built_in_plugins, load_installed, run, Host, Instruction, Plugin, RunResult, RunStatus};
 use sayso_core::protocol::{
-    ActionInvocation, ActionKind, ActionOrigin, AppInfo, Block, BlockContent, CommandRef, Delivery, Event, Input,
-    InputSource, Language, LanguagePair, Payload, SurfaceSnapshot, TextStyle, Translation, TranslationPair,
+    ActionInvocation, ActionKind, ActionOrigin, AppInfo, Block, BlockAction, BlockContent, CommandRef, Delivery, Event,
+    Input, InputSource, Language, LanguagePair, Payload, SurfaceSnapshot, TextStyle, Tone, Translation,
+    TranslationPair,
 };
 use sayso_core::store::{StoreRecord, Stores};
 
@@ -50,6 +51,17 @@ impl FakeHost {
             .into_iter()
             .filter_map(|instruction| match instruction {
                 Instruction::UpsertBlock(block) => Some(block),
+                _ => None,
+            })
+            .collect()
+    }
+
+    /// 附加到其他块上的按钮：（块引用, 按钮）。
+    fn attachments(&self) -> Vec<(String, Vec<BlockAction>)> {
+        self.instructions()
+            .into_iter()
+            .filter_map(|instruction| match instruction {
+                Instruction::AttachActions { block, actions } => Some((block, actions)),
                 _ => None,
             })
             .collect()
@@ -111,7 +123,7 @@ fn command(text: &str, via: InputSource) -> Event {
     )
 }
 
-/// 触发式扩展广播的 translated hook，来自语音输入。
+/// 后处理扩展广播的 translated hook，来自语音输入。
 fn translated(input: &str, output: &str, pairs: Vec<TranslationPair>, context: Option<&str>) -> Event {
     Event::new(
         LanguagePair::default(),
@@ -121,6 +133,7 @@ fn translated(input: &str, output: &str, pairs: Vec<TranslationPair>, context: O
             output: output.into(),
             pairs,
             context: context.map(Into::into),
+            card: Some("sayso.dictation/text".into()),
             source: Some(AppInfo { id: Some("com.apple.Notes".into()), name: Some("Notes".into()) }),
         }),
     )
@@ -133,7 +146,12 @@ fn click(block: &Block) -> Event {
         LanguagePair::default(),
         Some(SurfaceSnapshot { id: "s".into(), blocks: vec![] }),
         Payload::Action {
-            action: ActionInvocation { block_id: block.id.clone(), payload, origin: ActionOrigin::Candidate, record: None },
+            action: ActionInvocation {
+                block_id: block.id.clone(),
+                payload,
+                origin: ActionOrigin::Candidate,
+                record: None,
+            },
         },
     )
 }
@@ -158,7 +176,12 @@ fn speaks(instructions: &[Instruction]) -> Vec<(String, Language)> {
 }
 
 fn pair(target: &str, native: &str) -> TranslationPair {
-    TranslationPair { target: target.into(), native: native.into() }
+    TranslationPair { target: target.into(), native: native.into(), card: None }
+}
+
+/// Sayso 广播时为词对填好的卡片引用。
+fn carded(target: &str, native: &str, card: &str) -> TranslationPair {
+    TranslationPair { card: Some(card.into()), ..pair(target, native) }
 }
 
 async fn run_dictation(transcript: &str, reply: &str, delivery: Delivery) -> (RunResult, Arc<FakeHost>) {
@@ -187,7 +210,8 @@ async fn dictation_translates_inserts_speaks_and_publishes() {
         Some(&Instruction::PublishTranslated {
             output: "I have an apple.".into(),
             pairs: vec![pair("an apple", "a 苹果")],
-            context: Some("I have an apple.".into())
+            context: Some("I have an apple.".into()),
+            card: "text".into(),
         })
     );
 }
@@ -241,7 +265,8 @@ async fn dictation_skips_model_for_pure_target_language() {
         Some(&Instruction::PublishTranslated {
             output: "I want an apple today.".into(),
             pairs: vec![],
-            context: Some("I want an apple today.".into())
+            context: Some("I want an apple today.".into()),
+            card: "text".into(),
         })
     );
 }
@@ -407,7 +432,7 @@ async fn dictation_keeps_original_formatting_in_references_without_constraining_
     assert_eq!(pairs, [pair("want an apple", "想要\r\n一个苹果")]);
 }
 
-/// 划词翻译输出译文与原文块，朗读目标语言一侧，并以「目标 · 本地」词对广播；回复缺少原文语言时失败。
+/// 互译输出译文与原文块，朗读目标语言一侧，并以「目标 · 本地」词对广播；回复缺少原文语言时失败。
 #[tokio::test]
 async fn selection_translates_speaks_and_publishes() {
     let (_directory, stores) = temporary_stores();
@@ -423,7 +448,8 @@ async fn selection_translates_speaks_and_publishes() {
         Some(&Instruction::PublishTranslated {
             output: "意外发现".into(),
             pairs: vec![pair("serendipity", "意外发现")],
-            context: None
+            context: None,
+            card: "translation".into(),
         })
     );
 
@@ -436,7 +462,12 @@ async fn selection_translates_speaks_and_publishes() {
     assert!(speaks(&host.instructions()).is_empty());
     assert_eq!(
         host.instructions().last(),
-        Some(&Instruction::PublishTranslated { output: "巅峰".into(), pairs: vec![], context: None })
+        Some(&Instruction::PublishTranslated {
+            output: "巅峰".into(),
+            pairs: vec![],
+            context: None,
+            card: "translation".into()
+        })
     );
 
     let (_directory, stores) = temporary_stores();
@@ -446,38 +477,44 @@ async fn selection_translates_speaks_and_publishes() {
     assert!(host.blocks().is_empty());
 }
 
-/// 每个词条可单独加入；「全部加入」只加入候选框中尚未加入的词条，全部加入后显示完成提示；整句不是生词。
+/// 在每张词条卡片上附加「加入生词本」，多个词条另给「全部加入」；同一候选框中每个词条只计一次，整句也可加入。
 #[tokio::test]
-async fn wordbook_adds_single_words_and_all_remaining() {
+async fn wordbook_attaches_add_buttons_and_counts_each_word_once_per_candidate_box() {
     let (_directory, stores) = temporary_stores();
     let wordbook = built_in("sayso.wordbook");
 
-    async fn send(wordbook: &Plugin, stores: &Arc<Stores>, payload: Payload, surface: &[Block]) -> Vec<Block> {
-        // 模拟候选框：扩展的块带上来源前缀。
-        let blocks = surface.iter().cloned().map(|mut block| {
-            block.id = format!("sayso.wordbook/{}", block.id);
-            block
-        });
-        let event = Event::new(
-            LanguagePair::default(),
-            Some(SurfaceSnapshot { id: "s".into(), blocks: blocks.collect() }),
-            payload,
-        );
+    /// 返回本次附加的按钮，生词本不输出自己的块。
+    async fn send(
+        wordbook: &Plugin,
+        stores: &Arc<Stores>,
+        surface: &str,
+        payload: Payload,
+    ) -> Vec<(String, Vec<BlockAction>)> {
+        let event =
+            Event::new(LanguagePair::default(), Some(SurfaceSnapshot { id: surface.into(), blocks: vec![] }), payload);
         let host = FakeHost::new("sayso.wordbook", "", Delivery::Inserted, stores.clone());
         let result = run(wordbook, &event, host.clone()).await;
         assert_eq!(result.status, RunStatus::Succeeded, "{result:?}");
-        host.blocks()
+        assert!(host.blocks().is_empty());
+        host.attachments()
     }
-    fn invoke(block: &Block) -> Payload {
-        let ActionKind::Invoke { payload } = &block.actions[0].kind else { panic!("expected invoke") };
+    /// 点击附加按钮时，blockId 是卡片引用。
+    fn invoke((card, actions): &(String, Vec<BlockAction>)) -> Payload {
+        let ActionKind::Invoke { payload } = &actions[0].kind else { panic!("expected invoke") };
         Payload::Action {
             action: ActionInvocation {
-                block_id: block.id.clone(),
+                block_id: card.clone(),
                 payload: payload.clone(),
                 origin: ActionOrigin::Candidate,
                 record: None,
             },
         }
+    }
+    fn labels(attachments: &[(String, Vec<BlockAction>)]) -> Vec<(&str, &str, bool)> {
+        attachments
+            .iter()
+            .map(|(card, actions)| (card.as_str(), actions[0].label.as_deref().unwrap(), actions[0].disabled))
+            .collect()
     }
     let translation = |pairs: Vec<TranslationPair>, context: Option<&str>| {
         Payload::Translated(Translation {
@@ -485,76 +522,99 @@ async fn wordbook_adds_single_words_and_all_remaining() {
             output: context.unwrap_or_default().into(),
             pairs,
             context: context.map(Into::into),
+            card: Some("sayso.dictation/text".into()),
             source: None,
         })
     };
     let words = || stores.records("sayso.wordbook", "words").unwrap();
+    let count = |key: &str| words().into_iter().find(|record| record.key == key).unwrap().value("count");
+    let (text, apple, bananas) = ("sayso.dictation/text", "sayso.dictation/@term-0", "sayso.dictation/@term-1");
 
-    let offered =
-        translation(vec![pair("an apple", "a 苹果"), pair("bananas", "香蕉")], Some("I have an apple and bananas."));
-    let mut shown = send(&wordbook, &stores, offered, &[]).await;
-    assert_eq!(block_ids(&shown), ["en|an apple", "en|bananas", "add-all"]);
-    let labels: Vec<_> = shown.iter().map(|block| block.actions[0].label.as_deref().unwrap()).collect();
-    assert_eq!(labels, ["加入生词本", "加入生词本", "全部加入生词本"]);
+    // 同一词条的词对共用卡片，只附加一次；多个词条时整句卡片上有「全部加入」。
+    let offered = translation(
+        vec![
+            carded("an apple", "a 苹果", apple),
+            carded("bananas", "香蕉", bananas),
+            carded("An apple", "a 苹果", apple),
+        ],
+        Some("I have an apple and bananas."),
+    );
+    let attached = send(&wordbook, &stores, "s", offered).await;
+    assert_eq!(
+        labels(&attached),
+        [(apple, "加入生词本", false), (bananas, "加入生词本", false), (text, "全部加入生词本", false)]
+    );
     assert!(words().is_empty());
 
-    // 单独加入第一个词。
-    let single = send(&wordbook, &stores, invoke(&shown[0]), &shown).await;
+    // 单独加入第一个词，按钮换成不可点击的次数；还有词未加入，「全部加入」不变。
+    let after = send(&wordbook, &stores, "s", invoke(&attached[0])).await;
     assert_eq!(words().iter().map(|record| record.key.as_str()).collect::<Vec<_>>(), ["en|an apple"]);
     assert_eq!(words()[0].value("example"), Some("I have an apple and bananas.".into()));
-    assert_eq!(block_ids(&single), ["en|an apple"]);
-    assert!(single[0].actions.is_empty());
-    shown[0] = single[0].clone();
+    assert_eq!(labels(&after), [(apple, "已加入生词本（第 1 次）", true)]);
 
-    // 全部加入只补上剩下的词，并把按钮换成完成提示。
-    let all = send(&wordbook, &stores, invoke(&shown[2]), &shown).await;
-    let keys: HashSet<_> = words().into_iter().map(|record| record.key).collect();
-    assert_eq!(keys, HashSet::from(["en|an apple".to_string(), "en|bananas".to_string()]));
-    let apple = words().into_iter().find(|record| record.key == "en|an apple").unwrap();
-    assert_eq!(apple.value("count"), Some(1.into()));
-    assert_eq!(block_ids(&all), ["en|bananas", "add-all"]);
-    let BlockContent::Status { message, .. } = &all[1].content else { panic!("expected status block") };
-    assert_eq!(message, "已全部加入生词本");
+    // 全部加入只给剩下的词计数，并把「全部加入」换成完成状态。
+    let after = send(&wordbook, &stores, "s", invoke(&attached[2])).await;
+    assert_eq!(count("en|an apple"), Some(1.into()));
+    assert_eq!(count("en|bananas"), Some(1.into()));
+    assert_eq!(
+        labels(&after),
+        [
+            (apple, "已加入生词本（第 1 次）", true),
+            (bananas, "已加入生词本（第 1 次）", true),
+            (text, "已全部加入生词本", true)
+        ]
+    );
 
-    let paragraph =
-        translation(vec![pair("This is a much longer sentence for you to read.", "这是一个长得多的句子。")], None);
-    let long = send(&wordbook, &stores, paragraph, &[]).await;
-    assert_eq!(long.len(), 1);
-    assert_eq!(long[0].actions[0].label.as_deref(), Some("加入生词本"));
-    send(&wordbook, &stores, invoke(&long[0]), &long).await;
-    assert!(words()
-        .iter()
-        .any(|record| record.value("term") == Some("This is a much longer sentence for you to read.".into())));
+    // 另一个候选框再次遇到同一个词时累计次数；逐个加入完所有词时「全部加入」同样换成完成状态；整句也提供加入入口。
+    let paragraph = translation(
+        vec![
+            carded("an apple", "一个苹果", apple),
+            carded("This is a much longer sentence.", "这是一个长得多的句子。", bananas),
+        ],
+        None,
+    );
+    let attached = send(&wordbook, &stores, "t", paragraph).await;
+    send(&wordbook, &stores, "t", invoke(&attached[0])).await;
+    assert_eq!(count("en|an apple"), Some(2.into()));
+    let after = send(&wordbook, &stores, "t", invoke(&attached[1])).await;
+    assert_eq!(after.last().map(|(card, _)| card.as_str()), Some(text));
+    assert!(words().iter().any(|record| record.value("term") == Some("This is a much longer sentence.".into())));
 }
 
-/// 整句译文即使没有语言标签也必须产生真实词对，并经过生词本扩展生成可加入的块。
+/// 整句译文即使没有语言标签也必须产生真实词对，生词本据此在词条卡片上附加按钮。
 #[tokio::test]
-async fn dictation_learning_blocks_do_not_depend_on_model_language_labels() {
+async fn dictation_learning_pairs_do_not_depend_on_model_language_labels() {
     let transcript = "I have a 苹果.";
     let reply = r#"{"segments":[{"from":1,"to":5,"text":"I have an apple."}]}"#;
     let (_, dictation) = run_dictation(transcript, reply, Delivery::Inserted).await;
     assert_eq!(dictation.inserted(), ["I have an apple."]);
-    let Some(Instruction::PublishTranslated { output, pairs, context }) = dictation.instructions().last().cloned() else {
+    let Some(Instruction::PublishTranslated { output, pairs, context, .. }) = dictation.instructions().last().cloned()
+    else {
         panic!("a translated sentence must publish learning pairs")
     };
     assert_eq!(pairs, [pair("an apple", "a 苹果")]);
+    // 广播时 Sayso 为词对填上卡片引用。
+    let pairs =
+        pairs.into_iter().map(|pair| TranslationPair { card: Some("sayso.dictation/@term-0".into()), ..pair }).collect();
     let (_directory, stores) = temporary_stores();
     let wordbook = FakeHost::new("sayso.wordbook", "", Delivery::Inserted, stores);
     let event = Event::new(
         LanguagePair::default(),
-        None,
+        Some(SurfaceSnapshot { id: "s".into(), blocks: vec![] }),
         Payload::Translated(Translation {
             input: Input { text: transcript.into(), via: InputSource::Speech },
             output,
             pairs,
             context,
+            card: Some("sayso.dictation/text".into()),
             source: None,
         }),
     );
     assert_eq!(run(&built_in("sayso.wordbook"), &event, wordbook.clone()).await.status, RunStatus::Succeeded);
-    let blocks = wordbook.blocks();
-    assert_eq!(block_ids(&blocks), ["en|an apple"]);
-    assert_eq!(blocks[0].actions[0].label.as_deref(), Some("加入生词本"));
+    let attached = wordbook.attachments();
+    assert_eq!(attached.len(), 1);
+    assert_eq!(attached[0].0, "sayso.dictation/@term-0");
+    assert_eq!(attached[0].1[0].label.as_deref(), Some("加入生词本"));
 }
 
 /// 大小写、空白和标点变化不应产生额外的生词块。
@@ -631,13 +691,12 @@ fn manifest(capabilities: &str, timeout: u32) -> String {
     )
 }
 
-/// 第三方扩展都是事件式扩展：声明命令、订阅 command 或申请广播都无法加载。
+/// 第三方扩展也能是后处理扩展：声明命令并申请广播；命令必须同时订阅 command。
 #[test]
-fn third_party_extensions_cannot_be_triggers() {
-    for extra in [
-        r#""events":["command"],"commands":[{"id":"x","title":"X"}]"#,
-        r#""events":["translated"],"commands":[{"id":"x","title":"X"}]"#,
-        r#""events":["translated"],"capabilities":["publish"]"#,
+fn third_party_extensions_can_be_triggers() {
+    for (extra, loads) in [
+        (r#""events":["command"],"commands":[{"id":"x","title":"X"}],"capabilities":["publish"]"#, true),
+        (r#""events":["translated"],"commands":[{"id":"x","title":"X"}]"#, false),
     ] {
         let root = tempfile::tempdir().unwrap();
         let directory = root.path().join("plugin");
@@ -646,7 +705,7 @@ fn third_party_extensions_cannot_be_triggers() {
         std::fs::write(directory.join("extension.json"), manifest).unwrap();
         std::fs::write(directory.join("main.js"), "").unwrap();
         let (plugins, problems) = load_installed(root.path(), &HashSet::new());
-        assert!(plugins.is_empty() && problems.len() == 1, "{extra}");
+        assert_eq!((plugins.len(), problems.len()), if loads { (1, 0) } else { (0, 1) }, "{extra}");
     }
 }
 
@@ -721,32 +780,48 @@ async fn examples_load_and_handle_events() {
         translated(
             "I have a 苹果.",
             "I have an apple.",
-            vec![pair("an apple", "一个苹果"), pair("this is a much longer sentence", "整句")],
+            vec![
+                carded("an apple", "一个苹果", "sayso.dictation/@term-0"),
+                carded("this is a much longer sentence", "整句", "sayso.dictation/@term-1"),
+            ],
             Some("I have an apple."),
         )
     };
+    // 点击附加在卡片上的按钮。
+    let click_attached = |(card, actions): &(String, Vec<BlockAction>)| {
+        click(&Block { id: card.clone(), actions: actions.clone(), ..Block::status("", "", Tone::Info, "") })
+    };
 
-    // 收藏夹：每个短词对一张卡片，整句跳过；点「收藏」后累计次数。
+    // 收藏夹：只在短词的卡片上附加「收藏」，整句跳过；点击后累计次数，按钮换成不可点击的「已收藏」。
     let host = FakeHost::new("com.sayso.example.favorites", "", Delivery::Inserted, stores.clone());
     assert_eq!(run(&example("favorites"), &sentence(), host.clone()).await.status, RunStatus::Succeeded);
-    let cards = host.blocks();
-    assert_eq!(block_ids(&cards), ["favorite-en|an apple"]);
-    assert_eq!(run(&example("favorites"), &click(&cards[0]), host.clone()).await.status, RunStatus::Succeeded);
+    let attached = host.attachments();
+    assert_eq!(attached.iter().map(|(card, _)| card.as_str()).collect::<Vec<_>>(), ["sayso.dictation/@term-0"]);
+    assert_eq!(
+        run(&example("favorites"), &click_attached(&attached[0]), host.clone()).await.status,
+        RunStatus::Succeeded
+    );
     let favorites = stores.records("com.sayso.example.favorites", "favorites").unwrap();
     assert_eq!(favorites[0].fields["word"], "an apple");
     assert_eq!(favorites[0].fields["count"], 1.0);
+    let (card, saved) = host.attachments().pop().unwrap();
+    assert_eq!((card.as_str(), saved[0].disabled), ("sayso.dictation/@term-0", true));
 
-    // 语法讲解：翻译完毕只显示按钮，点击后才调用模型讲解写入的整句。
+    // 语法讲解：翻译完毕只在整句卡片上附加按钮，点击后才调用模型讲解写入的整句。
     let host = FakeHost::new("com.sayso.example.explain", "• Present simple.", Delivery::Inserted, stores.clone());
     assert_eq!(run(&example("explain"), &sentence(), host.clone()).await.status, RunStatus::Succeeded);
     assert_eq!(host.completions.load(Ordering::SeqCst), 0);
-    let button = host.blocks()[0].clone();
-    assert_eq!(run(&example("explain"), &click(&button), host.clone()).await.status, RunStatus::Succeeded);
+    let attached = host.attachments();
+    assert_eq!(attached.iter().map(|(card, _)| card.as_str()).collect::<Vec<_>>(), ["sayso.dictation/text"]);
+    assert_eq!(
+        run(&example("explain"), &click_attached(&attached[0]), host.clone()).await.status,
+        RunStatus::Succeeded
+    );
     let explained = host.blocks().pop().unwrap();
     let BlockContent::Card { title, body, .. } = &explained.content else { panic!("expected card") };
     assert_eq!((title.as_str(), body.as_deref()), ("I have an apple.", Some("• Present simple.")));
 
-    // Obsidian：翻译完毕显示按钮，点击后把整句与词对写成 callout 卡片，追加到库中当天的笔记。示例复制到临时目录，配置指向临时库。
+    // Obsidian：在每张词条卡片上附加按钮，点击后把词对与整句写成 callout 卡片，追加到库中当天的笔记。示例复制到临时目录，配置指向临时库。
     let copy = tempfile::tempdir().unwrap();
     let vault = tempfile::tempdir().unwrap();
     for file in ["extension.json", "main.js"] {
@@ -758,13 +833,25 @@ async fn examples_load_and_handle_events() {
     let host = FakeHost::new("com.sayso.example.obsidian", "", Delivery::Inserted, stores.clone());
     assert_eq!(run(&obsidian, &sentence(), host.clone()).await.status, RunStatus::Succeeded);
     assert!(!vault.path().join("Sayso").exists());
-    let button = host.blocks()[0].clone();
-    assert_eq!(run(&obsidian, &click(&button), host.clone()).await.status, RunStatus::Succeeded);
+    // 整句卡片与两张词条卡片各有一个按钮；点整句卡片上的记下整次翻译。
+    let attached = host.attachments();
+    let cards: Vec<_> = attached.iter().map(|(card, _)| card.as_str()).collect();
+    assert_eq!(cards, ["sayso.dictation/text", "sayso.dictation/@term-0", "sayso.dictation/@term-1"]);
+    assert_eq!(run(&obsidian, &click_attached(&attached[0]), host.clone()).await.status, RunStatus::Succeeded);
     let notes: Vec<_> = std::fs::read_dir(vault.path().join("Sayso")).unwrap().flatten().collect();
     let note = std::fs::read_to_string(notes[0].path()).unwrap();
     let card = note.trim_start().split_once('\n').map(|(title, body)| (title.to_string(), body.to_string()));
     let (title, body) = card.unwrap();
     assert!(title.starts_with("> [!note] ") && title.ends_with(" · Notes"), "{note}");
-    assert_eq!(body, "> I have ==an apple==.\n>\n> - ==an apple== · 一个苹果\n> - ==this is a much longer sentence== · 整句\n");
-    assert!(host.blocks().last().unwrap().actions.is_empty());
+    assert_eq!(
+        body,
+        "> I have ==an apple==.\n>\n> - ==an apple== · 一个苹果\n> - ==this is a much longer sentence== · 整句\n"
+    );
+    let (card, saved) = host.attachments().pop().unwrap();
+    assert_eq!((card.as_str(), saved[0].disabled), ("sayso.dictation/text", true));
+
+    // 词条卡片上的按钮只记这个词条，附上高亮该词条的整句。
+    assert_eq!(run(&obsidian, &click_attached(&attached[1]), host.clone()).await.status, RunStatus::Succeeded);
+    let note = std::fs::read_to_string(notes[0].path()).unwrap();
+    assert!(note.ends_with("> ==an apple== · 一个苹果\n>\n> I have ==an apple==.\n"), "{note}");
 }

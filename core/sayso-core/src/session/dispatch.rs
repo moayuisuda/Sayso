@@ -144,6 +144,14 @@ impl Host for DispatchHost {
                     self.inner.update_surface(id, |surface| surface.remove(&block_id, &self.extension_id));
                 }
             }
+            Instruction::AttachActions { block, actions } => {
+                // 候选框已关闭时没有可附加的块，与 RemoveBlock 一样静默结束。
+                if let Some(id) = &self.surface_id {
+                    self.inner
+                        .update_surface(id, |surface| surface.attach(&block, &self.extension_id, actions))
+                        .transpose()?;
+                }
+            }
             Instruction::Store(write) => {
                 self.inner.stores.apply(&self.extension_id, write)?;
                 self.inner.observer.store_changed(self.extension_id.clone());
@@ -154,13 +162,36 @@ impl Host for DispatchHost {
                     self.inner.speak(text, language, self.surface_id.as_deref());
                 }
             }
-            Instruction::PublishTranslated { output, pairs, context } => {
+            Instruction::PublishTranslated { output, mut pairs, context, card } => {
                 let command = self
                     .command
                     .as_ref()
                     .ok_or_else(|| CoreError::InvalidInstruction("publish needs a command event".into()))?;
-                let translation =
-                    Translation { input: command.input.clone(), output, pairs, context, source: command.source.clone() };
+                // 整句卡片由广播者画出，词条卡片由 Sayso 统一画出；订阅者只往卡片上附加按钮，两种卡片的引用都随事件广播。
+                let mut card_ref = None;
+                if let Some(id) = &self.surface_id {
+                    let language = self.inner.settings().languages().target;
+                    let cards = self.inner.update_surface(id, |surface| {
+                        let whole = surface.mark_translation_card(&self.extension_id, &card)?;
+                        let words = surface.present_pairs(&pairs, language, &self.extension_id, self.title.clone());
+                        Ok::<_, CoreError>((whole, words))
+                    });
+                    if let Some(cards) = cards {
+                        let (whole, words) = cards?;
+                        card_ref = Some(whole);
+                        for (pair, word) in pairs.iter_mut().zip(words) {
+                            pair.card = Some(word);
+                        }
+                    }
+                }
+                let translation = Translation {
+                    input: command.input.clone(),
+                    output,
+                    pairs,
+                    context,
+                    card: card_ref,
+                    source: command.source.clone(),
+                };
                 let route = Route::Republished { by: self.extension_id.clone() };
                 self.inner.dispatch(Payload::Translated(translation), self.surface_id.as_deref(), route);
             }

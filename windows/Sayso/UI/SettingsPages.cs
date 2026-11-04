@@ -31,19 +31,6 @@ internal sealed partial class SettingsWindow
 
     private UIElement GeneralPage()
     {
-        var key = Settings["triggerKey"]!;
-        var recorder = Controls.Button(HotkeyMonitor.KeyName(key["keyCode"]!.GetValue<uint>(), key["modifiers"]!.GetValue<ulong>()), () => { });
-        recorder.Click += (_, _) =>
-        {
-            recorder.Content = L("请按下快捷键…", "Press a shortcut…");
-            Hotkeys!.IsRecordingKey = true;
-        };
-        Hotkeys!.KeyRecorded = null;
-        Hotkeys.KeyRecorded += (code, modifiers) => Run(async () =>
-        {
-            await Save("triggerKey", new JsonObject { ["keyCode"] = code, ["modifiers"] = modifiers });
-            recorder.Content = HotkeyMonitor.KeyName(code, modifiers);
-        });
         var autoSpeak = Controls.Accented(new CheckBox { Content = L("生成翻译块时自动朗读", "Read translated blocks aloud"), IsChecked = Settings["autoSpeak"]!.GetValue<bool>(), FontSize = 13 });
         autoSpeak.Click += (_, _) => Run(() => Save("autoSpeak", JsonValue.Create(autoSpeak.IsChecked == true)));
         var rate = Controls.Accented(new Slider { Minimum = 0.3, Maximum = 0.6, Value = Settings["speechRate"]!.GetValue<double>(), Width = 180, StepFrequency = 0.01 });
@@ -56,9 +43,10 @@ internal sealed partial class SettingsWindow
                 Controls.Row(L("目标语言", "Target language"), SettingChoice("targetLanguage", Options(languages), enabled: value => Recognizes(SelectedAsrSource, value)), LanguageCaption()),
                 Controls.Row(L("本地语言", "Native language"), SettingChoice("nativeLanguage", Options(languages), true, value => Recognizes(SelectedAsrSource, value)), L("不会说的词直接用本地语言说，会自动翻译成目标语言。", "Say unfamiliar words in your native language to translate them in place.")),
                 Controls.Row(L("翻译背景", "Translation background"), userContext, L("提供给语音识别与翻译模型，让专业词汇更准确。写明你的身份或常说的领域即可。", "Shared with the speech and translation models so domain terms come out right. Describe your role or the topics you usually talk about."))),
-            Controls.Section(L("快捷键", "Shortcut"),
-                Controls.Row(L("开始输入", "Start input"), recorder, L("按住说话；期间按 T 切换为划词翻译。命令路由可在「扩展」中修改。", "Hold to speak; press T while holding to translate selected text. Edit routes in Extensions.")),
-                Controls.Row(L("触发方式", "Mode"), SettingChoice("hotkeyStyle", [("hold", L("按住说话", "Hold to talk")), ("toggle", L("按一下开始 / 结束", "Press to toggle"))]), L("录音或识别过程中按 Esc 取消。", "Press Esc to cancel recording or recognition."))),
+            Controls.Section(L("快捷键", "Shortcuts"), new UIElement[]
+                {
+                    Controls.Row(L("触发方式", "Mode"), SettingChoice("hotkeyStyle", [("hold", L("按住说话", "Hold to talk")), ("toggle", L("按一下开始 / 结束", "Press to toggle"))]), L("语音快捷键的用法。录音或识别过程中按 Esc 取消。", "How speech shortcuts work. Press Esc to cancel recording or recognition.")),
+                }.Concat(ShortcutRows()).ToArray()),
             Controls.Section(L("朗读", "Pronunciation"),
                 Controls.Row(L("自动朗读", "Read aloud"), autoSpeak),
                 Controls.Row(L("系统语音", "System voices"), Controls.Button(L("管理朗读语音", "Manage voices"), () => WindowsPlatform.Open("ms-settings:speech")),
@@ -70,6 +58,55 @@ internal sealed partial class SettingsWindow
             Controls.Section(L("关于", "About"), VersionRow())
         );
     }
+
+    /// 已启用扩展的命令各一行：快捷键（单修饰键或组合键，点击后录制）与命令收到的输入。
+    /// 一个快捷键只对应一个命令，设成其他命令的快捷键时那个命令的快捷键被清除。
+    private IEnumerable<UIElement> ShortcutRows()
+    {
+        foreach (var info in extensions.Where(e => e!["enabled"]!.GetValue<bool>()))
+        {
+            var manifest = info!["manifest"]!;
+            var extension = manifest["id"]!.GetValue<string>();
+            foreach (var command in manifest["commands"]!.AsArray())
+            {
+                var commandId = command!["id"]!.GetValue<string>();
+                var shortcut = Settings["shortcuts"]!.AsArray().FirstOrDefault(s => s!["command"]!["extensionId"]!.GetValue<string>() == extension && s["command"]!["commandId"]!.GetValue<string>() == commandId);
+                var key = shortcut?["key"];
+                var recorder = Controls.Button(key is null ? L("设置快捷键", "Set shortcut") : HotkeyMonitor.KeyName(key["keyCode"]!.GetValue<uint>(), key["modifiers"]!.GetValue<ulong>()), () => { });
+                recorder.Click += (_, _) =>
+                {
+                    recorder.Content = L("请按下快捷键…", "Press a shortcut…");
+                    Hotkeys!.KeyRecorded = (code, modifiers) => Run(() => SetShortcut(extension, commandId, new JsonObject { ["keyCode"] = code, ["modifiers"] = modifiers }));
+                    Hotkeys.IsRecordingKey = true;
+                };
+                var controls = Controls.Horizontal(recorder);
+                if (shortcut is not null)
+                {
+                    controls.Children.Add(Controls.Choice([("speech", L("语音输入", "Speech")), ("selection", L("选中文本", "Selected text"))], shortcut["input"]!.GetValue<string>(),
+                        value => Run(() => SetShortcutInput(extension, commandId, value))));
+                    controls.Children.Add(Controls.Button(L("清除", "Clear"), () => Run(() => SetShortcut(extension, commandId, null))));
+                }
+                yield return Controls.Row(command["title"]!.GetValue<string>(), controls, manifest["name"]!.GetValue<string>());
+            }
+        }
+    }
+
+    private async Task SetShortcut(string extension, string command, JsonObject? key)
+    {
+        // 快捷键的移交与输入来源的保留由核心完成。
+        Settings = (await core!.Call("setShortcut", new JsonObject { ["command"] = CommandKey(extension, command), ["key"] = key }))!;
+        Hotkeys!.Settings = Settings;
+        // 被移走快捷键的命令也要刷新。
+        await Navigate("general");
+    }
+
+    private async Task SetShortcutInput(string extension, string command, string input)
+    {
+        Settings = (await core!.Call("setShortcutInput", new JsonObject { ["command"] = CommandKey(extension, command), ["input"] = input }))!;
+        Hotkeys!.Settings = Settings;
+    }
+
+    private static JsonObject CommandKey(string extension, string command) => new() { ["extensionId"] = extension, ["commandId"] = command };
 
     /// 当前版本与手动检查更新；已发现新版本时显示下载入口。
     private UIElement VersionRow()

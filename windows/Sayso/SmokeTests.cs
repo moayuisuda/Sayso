@@ -59,28 +59,25 @@ internal static class SmokeTests
             if ((await core.Call("extensions"))!.AsArray().Single(e => e!["manifest"]!["id"]!.GetValue<string>() == "sayso.wordbook")!["enabled"]!.GetValue<bool>()) throw new Exception("Extension was not disabled.");
             await core.Call("setEnabled", new JsonObject { ["id"] = "sayso.wordbook", ["enabled"] = true });
         });
-        await Check("Core routing preserves selection input, shared routes and unbinding", async () =>
+        await Check("Core shortcuts keep input on rekey, move between commands and clear", async () =>
         {
             var original = (await core.Call("settings"))!;
-            var route = new JsonObject { ["kind"] = "key", ["code"] = 89 };
-            JsonObject Binding(string extension, bool bound = true) => new()
+            var key = new JsonObject { ["keyCode"] = 89, ["modifiers"] = 1 };
+            JsonObject Shortcut(string extension, bool set = true) => new()
             {
                 ["command"] = new JsonObject { ["extensionId"] = extension, ["commandId"] = "translate" },
-                ["route"] = bound ? route.DeepClone() : null
+                ["key"] = set ? key.DeepClone() : null
             };
+            JsonNode? At(JsonNode settings) => settings["shortcuts"]!.AsArray().SingleOrDefault(s => JsonNode.DeepEquals(s!["key"], key));
             try
             {
-                var updated = (await core.Call("bindCommand", Binding("sayso.selection")))!;
-                var selectedRoute = updated["routes"]!.AsArray().Single(r => JsonNode.DeepEquals(r!["key"], route))!;
-                if (selectedRoute["input"]!.GetValue<string>() != "selection") throw new Exception("Rebinding lost the selection input source.");
-                await core.Call("bindCommand", Binding("sayso.dictation"));
-                updated = (await core.Call("setRouteInput", new JsonObject { ["route"] = route.DeepClone(), ["input"] = "speech" }))!;
-                if (updated["commandBindings"]!.AsArray().Count(b => JsonNode.DeepEquals(b!["route"], route)) != 2) throw new Exception("Commands did not share the route.");
-                if (updated["routes"]!.AsArray().Single(r => JsonNode.DeepEquals(r!["key"], route))!["input"]!.GetValue<string>() != "speech") throw new Exception("Route input was not updated.");
-                updated = (await core.Call("bindCommand", Binding("sayso.selection", false)))!;
-                if (!updated["routes"]!.AsArray().Any(r => JsonNode.DeepEquals(r!["key"], route))) throw new Exception("A shared route was removed prematurely.");
-                updated = (await core.Call("bindCommand", Binding("sayso.dictation", false)))!;
-                if (updated["routes"]!.AsArray().Any(r => JsonNode.DeepEquals(r!["key"], route))) throw new Exception("An unused route was retained.");
+                var updated = (await core.Call("setShortcut", Shortcut("sayso.selection")))!;
+                if (At(updated)?["input"]!.GetValue<string>() != "selection") throw new Exception("Rekeying lost the selection input source.");
+                updated = (await core.Call("setShortcut", Shortcut("sayso.dictation")))!;
+                if (At(updated)?["command"]!["extensionId"]!.GetValue<string>() != "sayso.dictation") throw new Exception("The shortcut did not move to the new command.");
+                if (updated["shortcuts"]!.AsArray().Any(s => s!["command"]!["extensionId"]!.GetValue<string>() == "sayso.selection")) throw new Exception("The previous command kept the shortcut.");
+                updated = (await core.Call("setShortcut", Shortcut("sayso.dictation", false)))!;
+                if (At(updated) is not null) throw new Exception("A cleared shortcut was retained.");
             }
             finally { await core.Call("updateSettings", original); }
         });
@@ -97,7 +94,7 @@ internal static class SmokeTests
         });
         await Check("Cancelling a selection propagates across the asynchronous native boundary", async () =>
         {
-            await core.Call("trigger", new JsonObject { ["kind"] = "key", ["code"] = 0x54 });
+            await core.Call("trigger", new JsonObject { ["keyCode"] = 0x54, ["modifiers"] = 1 });
             await core.Call("cancel");
             await Task.Delay(100);
             if ((await core.Call("session"))!["kind"]!.GetValue<string>() != "idle") throw new Exception("Selection cancellation failed.");
@@ -107,7 +104,7 @@ internal static class SmokeTests
         var inspect = inspectRecording || inspectGlow || Environment.GetCommandLineArgs().Contains("--inspect-candidate");
         await Check("Missing service configuration produces a compact nonactivating candidate", async () =>
         {
-            await core.Call("trigger", new JsonObject { ["kind"] = "direct" });
+            await core.Call("trigger", new JsonObject { ["keyCode"] = 0xA3, ["modifiers"] = 0 });
             await Task.Delay(200);
             if ((await core.Call("session"))!["kind"]!.GetValue<string>() != "presenting") throw new Exception("Expected a configuration error surface.");
             candidate.ValidateCompactNotice();
@@ -117,7 +114,7 @@ internal static class SmokeTests
         {
             using var installed = new System.Speech.Synthesis.SpeechSynthesizer();
             var hasKorean = installed.GetInstalledVoices().Any(voice => voice.Enabled && voice.VoiceInfo.Culture.TwoLetterISOLanguageName == "ko");
-            await core.Call("trigger", new JsonObject { ["kind"] = "direct" });
+            await core.Call("trigger", new JsonObject { ["keyCode"] = 0xA3, ["modifiers"] = 0 });
             var surface = (await core.Call("session"))!;
             await core.Call("candidateAction", new JsonObject
             {
@@ -126,7 +123,7 @@ internal static class SmokeTests
             });
             var result = (await core.Call("session"))!;
             var notice = result["sections"]!.AsArray().SelectMany(section => section!["blocks"]!.AsArray())
-                .SingleOrDefault(block => block!["id"]!.GetValue<string>() == "speech");
+                .Select(item => item!["block"]).SingleOrDefault(block => block!["id"]!.GetValue<string>() == "speech");
             if (hasKorean && notice is not null) throw new Exception("An installed Korean voice failed: " + notice.ToJsonString());
             if (!hasKorean && notice?["message"]?.GetValue<string>().Contains("ko-KR") != true)
                 throw new Exception("A missing Korean voice was silently ignored across the ABI.");
@@ -141,7 +138,7 @@ internal static class SmokeTests
         });
         JsonObject Recording(string text = "") => new()
         {
-            ["kind"] = "recording", ["text"] = text, ["commands"] = new JsonArray("听写")
+            ["kind"] = "recording", ["text"] = text, ["command"] = "听写"
         };
         await Check("Live microphone feedback preserves time and stops after recording", async () =>
         {
@@ -176,7 +173,7 @@ internal static class SmokeTests
         {
             // 覆盖实际结果的多行布局，避免只验证紧凑错误提示而漏掉内容表面的边缘。
             candidate.Update(JsonNode.Parse("""
-                {"kind":"presenting","id":"layout-test","working":false,"sections":[{"sourceId":"sayso.dictation","blocks":[{"id":"text","type":"text","runs":[{"text":"The speaker speaks English and Chinese. A English sentence may contain Chinese words, and a Chinese sentence may contain English words; transcribe every word in the language it was spoken, without translating."}]}]}]}
+                {"kind":"presenting","id":"layout-test","working":false,"sections":[{"sourceId":"sayso.dictation","blocks":[{"block":{"id":"text","type":"text","runs":[{"text":"The speaker speaks English and Chinese. A English sentence may contain Chinese words, and a Chinese sentence may contain English words; transcribe every word in the language it was spoken, without translating."}]},"attachments":[]}]}]}
                 """)!);
             await Task.Delay(100);
             candidate.ValidateContentSurface();
@@ -189,7 +186,7 @@ internal static class SmokeTests
         await Check("Candidate keeps speech controls stable on hover and hides inline action duplicates", async () =>
         {
             var frame = JsonNode.Parse("""
-                {"kind":"presenting","id":"interaction-test","working":false,"sections":[{"sourceId":"sayso.dictation","blocks":[{"id":"text","type":"text","runs":[{"text":"こんにちは。","style":"highlight","action":"s1"},{"text":"わかりました。"},{"text":"動物園に行きます。","style":"highlight","action":"s2"}],"actions":[{"id":"s1","type":"speak","text":"こんにちは。","language":"ja"},{"id":"s2","type":"speak","text":"動物園に行きます。","language":"ja"}]},{"id":"term1","type":"term","term":"こんにちは。","language":"ja","gloss":"你好。","actions":[{"type":"invoke","label":"加入生词本","payload":[]}]},{"id":"term2","type":"term","term":"週末は家族と一緒に動物園に行って、いろいろな動物を見たいと思っています。","language":"ja","gloss":"周末我想和家人一起去动物园，看看各种各样的动物。","actions":[{"type":"invoke","label":"加入生词本","payload":[]}]}]}]}
+                {"kind":"presenting","id":"interaction-test","working":false,"sections":[{"sourceId":"sayso.dictation","blocks":[{"block":{"id":"text","type":"text","runs":[{"text":"こんにちは。","style":"highlight","action":"s1"},{"text":"わかりました。"},{"text":"動物園に行きます。","style":"highlight","action":"s2"}],"actions":[{"id":"s1","type":"speak","text":"こんにちは。","language":"ja"},{"id":"s2","type":"speak","text":"動物園に行きます。","language":"ja"}]},"attachments":[]},{"block":{"id":"term1","type":"term","term":"こんにちは。","language":"ja","gloss":"你好。"},"attachments":[{"sourceId":"sayso.wordbook","blockRef":"sayso.dictation/term1","actions":[{"type":"invoke","label":"加入生词本","payload":[]}]}]},{"block":{"id":"term2","type":"term","term":"週末は家族と一緒に動物園に行って、いろいろな動物を見たいと思っています。","language":"ja","gloss":"周末我想和家人一起去动物园，看看各种各样的动物。"},"attachments":[{"sourceId":"sayso.wordbook","blockRef":"sayso.dictation/term2","actions":[{"type":"invoke","label":"加入生词本","payload":[]}]}]}]}]}
                 """)!;
             candidate.Update(frame);
             await Task.Delay(100);
@@ -235,10 +232,14 @@ internal static class SmokeTests
                         {
                             ["sourceId"] = "sayso.dictation", ["blocks"] = new JsonArray(new JsonObject
                             {
-                                ["id"] = "text", ["type"] = "text", ["runs"] = new JsonArray(
-                                    new JsonObject { ["text"] = sample[..5] },
-                                    new JsonObject { ["text"] = sample[5..], ["style"] = "highlight", ["action"] = "play" }),
-                                ["actions"] = new JsonArray(new JsonObject { ["id"] = "play", ["type"] = "speak", ["text"] = sample[5..], ["language"] = "ja" })
+                                ["block"] = new JsonObject
+                                {
+                                    ["id"] = "text", ["type"] = "text", ["runs"] = new JsonArray(
+                                        new JsonObject { ["text"] = sample[..5] },
+                                        new JsonObject { ["text"] = sample[5..], ["style"] = "highlight", ["action"] = "play" }),
+                                    ["actions"] = new JsonArray(new JsonObject { ["id"] = "play", ["type"] = "speak", ["text"] = sample[5..], ["language"] = "ja" })
+                                },
+                                ["attachments"] = new JsonArray()
                             })
                         })
                     }

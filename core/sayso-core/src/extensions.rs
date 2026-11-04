@@ -3,10 +3,12 @@
 use std::collections::{HashMap, HashSet};
 use std::path::Path;
 
+use serde::Serialize;
+
 use crate::l10n::tr;
 use crate::plugin::{built_in_plugins, load_installed, CatalogProblem, Plugin, RunResult};
 use crate::protocol::{Capability, CommandSpec, EventType, Manifest};
-use crate::settings::{CommandKey, RouteKey, Settings};
+use crate::settings::{CommandKey, Hotkey, Settings, Shortcut};
 
 /// 交给扩展管理页的扩展信息。
 #[derive(Clone, Debug, uniffi::Record)]
@@ -17,6 +19,22 @@ pub struct ExtensionInfo {
     pub last_result: Option<RunResult>,
     /// 启用或安装前向用户说明扩展会收到什么、提供什么、申请哪些能力。
     pub permission_summary: String,
+    /// 订阅的 hook：什么时候运行、由谁广播。命令由快捷键触发，宿主按设置显示，不在其中。
+    pub listens: Vec<HookLink>,
+    /// 运行后会广播的 hook，以及随之运行的扩展。
+    pub emits: Vec<HookLink>,
+}
+
+/// 扩展与一个 hook 之间确实连着的关系，用于在扩展管理页说明扩展之间如何串联。
+#[derive(Clone, Debug, PartialEq, Serialize, uniffi::Record)]
+pub struct HookLink {
+    pub event: EventType,
+    /// 这个 hook 在什么时候发生。
+    pub description: String,
+    /// 另一端的已启用扩展：订阅时为引出它的扩展，广播时为订阅它的扩展。
+    pub extensions: Vec<String>,
+    /// 向用户说明另一端的一句话；hook 由 Sayso 直接发出（`input`、`action`）时为空。
+    pub relation: Option<String>,
 }
 
 /// 事件的投递范围。
@@ -90,12 +108,11 @@ impl Extensions {
         })
     }
 
-    /// 绑定在这些路由上的已启用命令。
-    pub fn commands_routed_to(&self, settings: &Settings, routes: &[RouteKey]) -> Vec<CommandKey> {
-        self.enabled_commands(settings)
-            .filter(|(key, _)| settings.binding(key).is_some_and(|route| routes.contains(&route)))
-            .map(|(key, _)| key)
-            .collect()
+    /// 快捷键触发的命令及其名称；命令所属扩展未启用时为空。
+    pub fn command_for<'a>(&self, settings: &'a Settings, key: Hotkey) -> Option<(&'a Shortcut, String)> {
+        let shortcut = settings.shortcuts.get(&key)?;
+        let (_, spec) = self.enabled_commands(settings).find(|(command, _)| *command == shortcut.command)?;
+        Some((shortcut, spec.title.clone()))
     }
 
     /// 已启用、订阅了该事件且在投递范围内的扩展。
@@ -118,8 +135,84 @@ impl Extensions {
                 enabled: settings.enabled_extensions.iter().any(|id| id == plugin.id()),
                 last_result: self.last_results.get(plugin.id()).cloned(),
                 permission_summary: permission_summary(&plugin.manifest),
+                listens: self.listens(settings, &plugin.manifest),
+                emits: self.emits(settings, &plugin.manifest),
             })
             .collect()
+    }
+
+    fn listens(&self, settings: &Settings, manifest: &Manifest) -> Vec<HookLink> {
+        manifest
+            .events
+            .iter()
+            .filter(|event| **event != EventType::Command)
+            .filter_map(|event| match broadcaster_of(*event) {
+                Some(capability) => {
+                    let extensions = self.enabled_names(settings, manifest, |other| other.grants(capability));
+                    peer_link(*event, tr("来自：", "From: "), extensions)
+                }
+                None => Some(HookLink {
+                    event: *event,
+                    description: hook_description(*event),
+                    extensions: Vec::new(),
+                    relation: None,
+                }),
+            })
+            .collect()
+    }
+
+    fn emits(&self, settings: &Settings, manifest: &Manifest) -> Vec<HookLink> {
+        [EventType::Translated, EventType::Inserted]
+            .into_iter()
+            .filter(|event| broadcaster_of(*event).is_some_and(|capability| manifest.grants(capability)))
+            .filter_map(|event| {
+                let extensions = self.enabled_names(settings, manifest, |other| other.events.contains(&event));
+                peer_link(event, tr("接着运行：", "Runs next: "), extensions)
+            })
+            .collect()
+    }
+
+    /// 除 `manifest` 自身以外、满足条件的已启用扩展名。
+    fn enabled_names(
+        &self,
+        settings: &Settings,
+        manifest: &Manifest,
+        matches: impl Fn(&Manifest) -> bool,
+    ) -> Vec<String> {
+        self.enabled(settings)
+            .filter(|plugin| plugin.id() != manifest.id && matches(&plugin.manifest))
+            .map(|plugin| plugin.manifest.name.clone())
+            .collect()
+    }
+}
+
+/// 与其他扩展之间的关系；另一端没有已启用的扩展时这条路走不通，不算关系。
+fn peer_link(event: EventType, prefix: String, extensions: Vec<String>) -> Option<HookLink> {
+    (!extensions.is_empty()).then(|| HookLink {
+        event,
+        description: hook_description(event),
+        relation: Some(prefix + &extensions.join(&tr("、", ", "))),
+        extensions,
+    })
+}
+
+/// 让扩展的运行引出这个 hook 的能力：`translated` 由 `publish` 广播，`inserted` 在 `insert` 写入后由 Sayso 广播；
+/// `input`、`action` 不由扩展引出。
+fn broadcaster_of(event: EventType) -> Option<Capability> {
+    match event {
+        EventType::Translated => Some(Capability::Publish),
+        EventType::Inserted => Some(Capability::Insert),
+        EventType::Command | EventType::Action | EventType::Input => None,
+    }
+}
+
+fn hook_description(event: EventType) -> String {
+    match event {
+        EventType::Command => tr("按下它的命令的快捷键时", "When its command's shortcut is pressed"),
+        EventType::Action => tr("点击它在候选框里的按钮时", "When its button in the candidate box is clicked"),
+        EventType::Input => tr("快捷键触发后，Sayso 准备好输入时", "When Sayso has the input ready after a shortcut"),
+        EventType::Translated => tr("翻译完毕时", "When a translation is done"),
+        EventType::Inserted => tr("文字写入当前应用后", "After text is typed into the current app"),
     }
 }
 

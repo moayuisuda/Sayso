@@ -51,9 +51,9 @@ final class AppModel {
         hotkeys.candidateSurface = { [panel] timestamp in panel.dismissibleSurface(forEventAt: timestamp) }
         hotkeys.onAction = { action in
             switch action {
-            case .route(let route): core.trigger(route: route)
+            case .trigger(let key): core.trigger(key: key)
             case .stop: core.stop()
-            case .toggle(let routes): core.toggle(routes: routes)
+            case .toggle(let key): core.toggle(key: key)
             case .cancel: core.cancel()
             case .dismiss(let id): core.dismissSurface(surfaceId: id)
             }
@@ -73,13 +73,12 @@ final class AppModel {
         }
     }
 
-    /// 入口键、路由或扩展启停变化时同步到监听器：只监听绑定了已启用命令的路由键。
+    /// 快捷键或扩展启停变化时同步到监听器：只监听触发已启用命令的快捷键。
     private func syncHotkeysWithSettings() {
         withObservationTracking {
             hotkeys.style = model.settings.hotkeyStyle
-            hotkeys.trigger = model.settings.triggerKey
             _ = model.extensions
-            hotkeys.routeKeys = Set(model.core.activeRouteKeys())
+            hotkeys.shortcuts = Set(model.core.activeShortcuts())
         } onChange: { [weak self] in
             Task { @MainActor in self?.syncHotkeysWithSettings() }
         }

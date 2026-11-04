@@ -77,7 +77,7 @@ internal static class NativeMethods
     internal static void Chord(ushort key)
     {
         var input = new List<Input>();
-        // 路由触发时入口修饰键仍可能按住；先释放 OS 的修饰状态，注入事件由热键钩子忽略。
+        // 快捷键触发时其修饰键仍可能按住；先释放 OS 的修饰状态，注入事件由热键钩子忽略。
         foreach (ushort modifier in new ushort[] { 0xA0, 0xA1, 0xA2, 0xA3, 0xA4, 0xA5, 0x5B, 0x5C })
             if (GetAsyncKeyState(modifier) < 0) input.Add(Key(modifier, true));
         input.AddRange([Key(0xA2), Key(key), Key(key, true), Key(0xA2, true)]);

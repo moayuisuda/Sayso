@@ -10,7 +10,8 @@ use crate::llm::{Endpoint, LlmProvider, ReasoningLevel};
 use crate::protocol::{InputSource, Language, LanguagePair};
 use crate::store::write_atomically;
 
-/// 统一入口键。键码与修饰位是平台的原生值（macOS 为 kVK 键码与 CGEventFlags），core 只做存储与比较。
+/// 快捷键：单修饰键（如右 ⌥）或「修饰键 + 普通键」组合。键码与修饰位是平台的原生值（macOS 为 kVK 键码与 CGEventFlags），
+/// core 只做存储与比较。
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, Serialize, Deserialize, uniffi::Record)]
 #[serde(rename_all = "camelCase")]
 pub struct Hotkey {
@@ -19,29 +20,14 @@ pub struct Hotkey {
     pub modifiers: u64,
 }
 
-/// 入口键的触发方式。
+/// 语音快捷键的触发方式。
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize, uniffi::Enum)]
 #[serde(rename_all = "camelCase")]
 pub enum HotkeyStyle {
-    /// 按住入口键说话，松开结束。
+    /// 按住快捷键说话，松开结束。
     Hold,
     /// 按一下开始，再按一下结束。
     Toggle,
-}
-
-/// 路由：只按入口键为 `Direct`；按住入口键期间再按某个键为 `Key`，这个键即路由键。
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, Serialize, Deserialize, uniffi::Enum)]
-#[serde(tag = "kind", rename_all = "camelCase")]
-pub enum RouteKey {
-    Direct,
-    Key { code: u16 },
-}
-
-/// 一个路由及其输入来源。路由上的全部命令收到同一份输入。
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize, uniffi::Record)]
-pub struct Route {
-    pub key: RouteKey,
-    pub input: InputSource,
 }
 
 /// 扩展命令的唯一标识：扩展 id + 命令 id。
@@ -52,20 +38,20 @@ pub struct CommandKey {
     pub command_id: String,
 }
 
-/// 命令绑定到的路由；没有绑定的命令不会被触发。
+/// 快捷键触发的命令及命令收到的输入来源。
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, uniffi::Record)]
-pub struct CommandBinding {
+pub struct Shortcut {
     pub command: CommandKey,
-    pub route: RouteKey,
+    pub input: InputSource,
 }
 
 /// 平台提供的默认按键：各平台键码不同。
 #[derive(Clone, Copy, Debug, uniffi::Record)]
 pub struct PlatformDefaults {
-    /// 默认入口键（macOS 为右 Option）。
-    pub trigger_key: Hotkey,
-    /// 划词翻译的默认路由键（macOS 为 T）。
-    pub selection_route_key: u16,
+    /// 混说翻译的默认快捷键（macOS 为右 Option）。
+    pub speech_shortcut: Hotkey,
+    /// 互译的默认快捷键（macOS 为 Option + T）。
+    pub selection_shortcut: Hotkey,
     /// 平台语音合成的默认语速。
     pub speech_rate: f32,
 }
@@ -78,10 +64,9 @@ pub struct Settings {
     /// 用户自述的身份或领域（如「我是软件工程师」），提供给识别与翻译模型以提升专业词汇的准确率。
     pub user_context: String,
     pub hotkey_style: HotkeyStyle,
-    pub trigger_key: Hotkey,
-    /// 全部路由；「直接」路由总是存在。
-    pub routes: Vec<Route>,
-    pub command_bindings: Vec<CommandBinding>,
+    /// 以快捷键为键：一个快捷键只触发一个命令；一个命令也只有一个快捷键，没有快捷键的命令不会被触发。
+    #[serde(with = "shortcut_entries")]
+    pub shortcuts: HashMap<Hotkey, Shortcut>,
     /// 扩展输出朗读指令时自动朗读。
     pub auto_speak: bool,
     pub speech_rate: f32,
@@ -106,7 +91,6 @@ pub const WORDBOOK_ID: &str = "sayso.wordbook";
 impl Settings {
     pub fn defaults(platform: PlatformDefaults) -> Self {
         let llm = LlmProvider::Openai;
-        let selection = RouteKey::Key { code: platform.selection_route_key };
         let translate =
             |extension_id: &str| CommandKey { extension_id: extension_id.into(), command_id: "translate".into() };
         Settings {
@@ -114,15 +98,16 @@ impl Settings {
             native_language: Language::Chinese,
             user_context: String::new(),
             hotkey_style: HotkeyStyle::Hold,
-            trigger_key: platform.trigger_key,
-            routes: vec![
-                Route { key: RouteKey::Direct, input: InputSource::Speech },
-                Route { key: selection, input: InputSource::Selection },
-            ],
-            command_bindings: vec![
-                CommandBinding { command: translate(SPEECH_TRANSLATE_ID), route: RouteKey::Direct },
-                CommandBinding { command: translate(SELECTION_TRANSLATE_ID), route: selection },
-            ],
+            shortcuts: HashMap::from([
+                (
+                    platform.speech_shortcut,
+                    Shortcut { command: translate(SPEECH_TRANSLATE_ID), input: InputSource::Speech },
+                ),
+                (
+                    platform.selection_shortcut,
+                    Shortcut { command: translate(SELECTION_TRANSLATE_ID), input: InputSource::Selection },
+                ),
+            ]),
             auto_speak: true,
             speech_rate: platform.speech_rate,
             asr_source: source::VOLCENGINE.into(),
@@ -139,61 +124,68 @@ impl Settings {
         LanguagePair { target: self.target_language, native: self.native_language }
     }
 
-    pub fn route(&self, key: RouteKey) -> Option<Route> {
-        self.routes.iter().copied().find(|route| route.key == key)
+    /// 命令的快捷键。
+    pub fn shortcut_of(&self, command: &CommandKey) -> Option<Hotkey> {
+        self.shortcuts.iter().find(|(_, shortcut)| &shortcut.command == command).map(|(key, _)| *key)
     }
 
-    pub fn binding(&self, command: &CommandKey) -> Option<RouteKey> {
-        self.command_bindings.iter().find(|binding| &binding.command == command).map(|binding| binding.route)
-    }
-
-    /// 改绑到新路由时继承原输入来源；首次绑定使用语音，已有目标路由的输入来源保持不变。
-    pub fn bind_command(&mut self, command: CommandKey, route: Option<RouteKey>) {
-        let input = self.binding(&command).and_then(|key| self.route(key)).map_or(InputSource::Speech, |r| r.input);
-        self.command_bindings.retain(|binding| binding.command != command);
-        if let Some(key) = route {
-            if self.route(key).is_none() {
-                self.routes.push(Route { key, input });
-            }
-            self.command_bindings.push(CommandBinding { command, route: key });
-        }
-        self.normalize_routes();
-    }
-
-    /// 输入来源属于路由，同一路由上的全部命令共享；路由仅由命令绑定操作创建。
-    pub fn set_route_input(&mut self, key: RouteKey, input: InputSource) {
-        if let Some(route) = self.routes.iter_mut().find(|route| route.key == key) {
-            route.input = input;
+    /// 设置命令的快捷键，`None` 为移除。快捷键已属于其他命令时从那个命令上移走；
+    /// 改键时保留原输入来源，首次设置为语音。
+    pub fn set_shortcut(&mut self, command: CommandKey, key: Option<Hotkey>) {
+        let previous = self.shortcut_of(&command).and_then(|key| self.shortcuts.remove(&key));
+        if let Some(key) = key {
+            let input = previous.map_or(InputSource::Speech, |shortcut| shortcut.input);
+            self.shortcuts.insert(key, Shortcut { command, input });
         }
     }
 
-    /// 规整用户提交的设置：翻译背景截断到长度上限；切换翻译服务时载入该服务的默认地址与模型；「直接」路由总是存在；
-    /// 删除的路由键上的命令绑定随之移除，不再绑定命令的路由键随之删除。
+    /// 修改命令快捷键的输入来源；命令没有快捷键时不变。
+    pub fn set_shortcut_input(&mut self, command: &CommandKey, input: InputSource) {
+        if let Some(shortcut) = self.shortcuts.values_mut().find(|shortcut| &shortcut.command == command) {
+            shortcut.input = input;
+        }
+    }
+
+    /// 规整用户提交的设置：翻译背景截断到长度上限；切换翻译服务时载入该服务的默认地址与模型。
     pub fn normalized(mut self, previous: &Settings) -> Self {
         self.user_context = self.user_context.chars().take(USER_CONTEXT_LIMIT).collect();
         if self.llm_provider != previous.llm_provider {
             self.llm_base_url = self.llm_provider.default_base_url().into();
             self.llm_model = self.llm_provider.default_model().into();
         }
-        self.normalize_routes();
         self
     }
+}
 
-    fn normalize_routes(&mut self) {
-        if self.route(RouteKey::Direct).is_none() {
-            self.routes.insert(0, Route { key: RouteKey::Direct, input: InputSource::Speech });
-        }
-        let mut seen = Vec::new();
-        self.routes.retain(|route| {
-            let fresh = !seen.contains(&route.key);
-            seen.push(route.key);
-            fresh
-        });
-        let routes = self.routes.clone();
-        self.command_bindings.retain(|binding| routes.iter().any(|route| route.key == binding.route));
-        let bindings = self.command_bindings.clone();
-        self.routes
-            .retain(|route| route.key == RouteKey::Direct || bindings.iter().any(|binding| binding.route == route.key));
+/// 快捷键表在 JSON 中存为 `[{ key, command, input }]`：JSON 对象的键只能是字符串。
+mod shortcut_entries {
+    use std::collections::HashMap;
+
+    use serde::{Deserialize, Deserializer, Serialize, Serializer};
+
+    use super::{CommandKey, Hotkey, InputSource, Shortcut};
+
+    #[derive(Serialize, Deserialize)]
+    struct Entry {
+        key: Hotkey,
+        command: CommandKey,
+        input: InputSource,
+    }
+
+    pub fn serialize<S: Serializer>(shortcuts: &HashMap<Hotkey, Shortcut>, serializer: S) -> Result<S::Ok, S::Error> {
+        let entries: Vec<Entry> = shortcuts
+            .iter()
+            .map(|(key, shortcut)| Entry { key: *key, command: shortcut.command.clone(), input: shortcut.input })
+            .collect();
+        entries.serialize(serializer)
+    }
+
+    pub fn deserialize<'de, D: Deserializer<'de>>(deserializer: D) -> Result<HashMap<Hotkey, Shortcut>, D::Error> {
+        let entries = Vec::<Entry>::deserialize(deserializer)?;
+        Ok(entries
+            .into_iter()
+            .map(|entry| (entry.key, Shortcut { command: entry.command, input: entry.input }))
+            .collect())
     }
 }
 
@@ -201,8 +193,13 @@ impl Settings {
 #[derive(Clone, Debug, PartialEq, Eq, Hash, uniffi::Enum)]
 pub enum SecretSlot {
     /// 识别来源的密钥类配置项。
-    Asr { source: String, field: String },
-    Llm { provider: LlmProvider },
+    Asr {
+        source: String,
+        field: String,
+    },
+    Llm {
+        provider: LlmProvider,
+    },
 }
 
 impl SecretSlot {
@@ -290,25 +287,10 @@ mod tests {
 
     fn defaults() -> Settings {
         Settings::defaults(PlatformDefaults {
-            trigger_key: Hotkey { key_code: 61, modifiers: 0 },
-            selection_route_key: 17,
+            speech_shortcut: Hotkey { key_code: 61, modifiers: 0 },
+            selection_shortcut: Hotkey { key_code: 17, modifiers: 0x80000 },
             speech_rate: 0.5,
         })
-    }
-
-    #[test]
-    fn normalizing_resets_llm_defaults_and_drops_orphan_bindings() {
-        let previous = defaults();
-        let mut edited = previous.clone();
-        edited.llm_provider = LlmProvider::Claude;
-        edited.llm_model = "stale".into();
-        edited.routes.retain(|route| route.key == RouteKey::Direct);
-
-        let normalized = edited.normalized(&previous);
-        assert_eq!(normalized.llm_base_url, LlmProvider::Claude.default_base_url());
-        assert_eq!(normalized.llm_model, LlmProvider::Claude.default_model());
-        assert_eq!(normalized.command_bindings.len(), 1);
-        assert_eq!(normalized.command_bindings[0].command.extension_id, SPEECH_TRANSLATE_ID);
     }
 
     fn translate(extension: &str) -> CommandKey {
@@ -316,53 +298,53 @@ mod tests {
     }
 
     #[test]
-    fn rebinding_inherits_input_and_respects_an_existing_destination() {
-        let mut settings = defaults();
-        let selection = translate(SELECTION_TRANSLATE_ID);
-        let original = settings.binding(&selection).unwrap();
-        let destination = RouteKey::Key { code: 89 };
+    fn normalizing_resets_llm_defaults() {
+        let previous = defaults();
+        let mut edited = previous.clone();
+        edited.llm_provider = LlmProvider::Claude;
+        edited.llm_model = "stale".into();
 
-        settings.bind_command(selection.clone(), Some(destination));
-        assert_eq!(settings.route(destination).unwrap().input, InputSource::Selection);
-        assert!(settings.route(original).is_none());
-
-        // 重复提交同一绑定不会新增路由或命令记录，也不会丢失输入来源。
-        let rebound = settings.clone();
-        settings.bind_command(selection.clone(), Some(destination));
-        assert_eq!(settings, rebound);
-
-        settings.bind_command(selection.clone(), Some(RouteKey::Direct));
-        assert_eq!(settings.route(RouteKey::Direct).unwrap().input, InputSource::Speech);
-        assert_eq!(settings.binding(&selection), Some(RouteKey::Direct));
-        assert_eq!(settings.binding(&translate(SPEECH_TRANSLATE_ID)), Some(RouteKey::Direct));
-        assert!(settings.route(destination).is_none());
+        let normalized = edited.normalized(&previous);
+        assert_eq!(normalized.llm_base_url, LlmProvider::Claude.default_base_url());
+        assert_eq!(normalized.llm_model, LlmProvider::Claude.default_model());
     }
 
     #[test]
-    fn shared_route_input_and_cleanup_follow_the_remaining_bindings() {
+    fn a_shortcut_moves_to_the_command_that_takes_it_and_keeps_input_on_rekey() {
         let mut settings = defaults();
         let speech = translate(SPEECH_TRANSLATE_ID);
         let selection = translate(SELECTION_TRANSLATE_ID);
-        let shared = RouteKey::Key { code: 77 };
 
-        settings.bind_command(speech.clone(), Some(shared));
-        settings.bind_command(selection.clone(), Some(shared));
-        settings.set_route_input(shared, InputSource::Selection);
-        assert_eq!(settings.route(settings.binding(&speech).unwrap()).unwrap().input, InputSource::Selection);
-        assert_eq!(settings.route(settings.binding(&selection).unwrap()).unwrap().input, InputSource::Selection);
+        // 改键：保留原输入来源，重复提交不变。
+        let other = Hotkey { key_code: 89, modifiers: 0x80000 };
+        settings.set_shortcut(selection.clone(), Some(other));
+        assert_eq!(settings.shortcuts[&other].input, InputSource::Selection);
+        let rekeyed = settings.clone();
+        settings.set_shortcut(selection.clone(), Some(other));
+        assert_eq!(settings, rekeyed);
 
-        settings.bind_command(speech.clone(), None);
-        assert_eq!(settings.route(shared).unwrap().input, InputSource::Selection);
-        settings.bind_command(selection, None);
-        assert!(settings.route(shared).is_none());
-        assert_eq!(settings.routes, vec![Route { key: RouteKey::Direct, input: InputSource::Speech }]);
+        // 占用其他命令的快捷键：原命令失去快捷键。
+        let speech_key = settings.shortcut_of(&speech).unwrap();
+        settings.set_shortcut(selection.clone(), Some(speech_key));
+        assert_eq!(settings.shortcuts[&speech_key].command, selection);
+        assert_eq!(settings.shortcut_of(&speech), None);
+        assert_eq!(settings.shortcuts.len(), 1);
 
-        // 没有旧绑定时是首次创建路由，默认来源由核心确定为语音。
-        settings.bind_command(speech.clone(), Some(shared));
-        assert_eq!(settings.route(shared).unwrap().input, InputSource::Speech);
-        settings.bind_command(speech, Some(RouteKey::Direct));
-        let unchanged = settings.clone();
-        settings.set_route_input(shared, InputSource::Selection);
-        assert_eq!(settings, unchanged);
+        // 首次设置为语音；移除后命令没有快捷键。
+        settings.set_shortcut(speech.clone(), Some(other));
+        assert_eq!(settings.shortcuts[&other].input, InputSource::Speech);
+        settings.set_shortcut_input(&speech, InputSource::Selection);
+        assert_eq!(settings.shortcuts[&other].input, InputSource::Selection);
+        settings.set_shortcut(speech.clone(), None);
+        assert_eq!(settings.shortcut_of(&speech), None);
+        assert_eq!(settings.shortcuts.len(), 1);
+    }
+
+    #[test]
+    fn shortcuts_round_trip_through_json() {
+        let settings = defaults();
+        let json = serde_json::to_value(&settings).unwrap();
+        assert!(json["shortcuts"].as_array().unwrap().iter().any(|entry| entry["key"]["keyCode"] == 61));
+        assert_eq!(serde_json::from_value::<Settings>(json).unwrap(), settings);
     }
 }

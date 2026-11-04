@@ -1,4 +1,4 @@
-/** 语音翻译的语言资料：每种语言只维护自身特点和等义例句，不复制语言对模板。 */
+/** 混说翻译的语言资料：每种语言只维护自身特点和等义例句，不复制语言对模板。 */
 export const languageProfiles = {
   en: {
     source: "Recognize English phrases by their syntax and meaning, including contractions; Latin letters alone do not identify English.",

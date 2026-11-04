@@ -9,15 +9,15 @@ core/                     Rust core（macOS 与 Windows 共用）
 ├── sayso-core/src/
 │   ├── protocol/           扩展协议：语言、块、操作、事件、清单与页签模板
 │   ├── plugin/             JS 扩展运行时（QuickJS）、`sayso.*` API、扩展目录加载
-│   ├── session/            会话状态机：路由 → 录音识别或读取选区 → 命令；候选框内容、停留时长、块操作
+│   ├── session/            会话状态机：快捷键 → 录音识别或读取选区 → 命令；候选框内容、停留时长、块操作
 │   ├── asr/                识别来源注册表；火山引擎 / 千问 / Soniox（流式 WebSocket）、OpenAI 兼容 URL（本地或云端，批量）
 │   ├── llm/                OpenAI 兼容 / Anthropic 客户端、服务预设、思考强度、连接预热
-│   ├── extensions.rs       扩展启停、命令路由、广播对象
+│   ├── extensions.rs       扩展启停、快捷键对应的命令、广播对象
 │   ├── store.rs            扩展数据存储（串行、原子落盘）
 │   ├── settings.rs         设置（settings.json）与密钥（config.json）
 │   ├── package.rs          `.sayso` 扩展包
 │   └── platform.rs         平台适配层接口：录音、选区、写入、朗读与状态推送
-├── plugins/              内置扩展「语音翻译」「划词翻译」「生词本」（JS，编译时嵌入）
+├── plugins/              内置扩展「混说翻译」「互译」「生词本」（JS，编译时嵌入）
 └── sayso-windows-bridge/  Windows 的 C ABI：请求、状态回调与可取消的平台异步调用
 Sources/
 ├── SaysoCore/            UniFFI 生成的 Swift 绑定（构建产物）
@@ -25,7 +25,7 @@ Sources/
     ├── Platform/           适配层实现（MacPlatform）
     ├── App/                应用组装与 core 状态镜像（CoreModel）
     ├── Audio/              麦克风 → 16kHz PCM
-    ├── Input/              全局热键（CGEventTap）：统一入口键 + 路由键 → 路由
+    ├── Input/              全局快捷键（CGEventTap）：单修饰键或组合键 → 命令
     ├── Injection/          剪贴板 + ⌘V 写入、读取选中文本、剪贴板快照
     ├── Speech/             系统 TTS 朗读
     └── UI/                 候选框、块组件、设置窗口、扩展管理与扩展页签

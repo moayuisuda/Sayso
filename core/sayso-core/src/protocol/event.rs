@@ -5,19 +5,19 @@ use crate::store::StoreRecord;
 
 /// 扩展事件类型。新增事件只增加 case，已发布的名称不可修改。
 ///
-/// 扩展分两种：触发式扩展（内置的语音翻译、划词翻译）由路由触发，接收 `command`，
-/// 并在处理的各个环节广播 hook；事件式扩展（生词本与全部第三方扩展）只订阅 hook，
-/// 可以往候选框添加块和按钮，用户点击后以 `action` 回调。
+/// 扩展分两种：后处理扩展（如混说翻译、互译）声明命令，由快捷键触发，接收 `command`，
+/// 并在处理的各个环节广播 hook；事件式扩展（如生词本）只订阅 hook，
+/// 可以往候选框添加块和按钮，用户点击后以 `action` 回调。内置扩展与第三方扩展都可以是任一种。
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, Serialize, Deserialize, uniffi::Enum)]
 #[serde(rename_all = "lowercase")]
 pub enum EventType {
-    /// 用户触发了该扩展的命令（定向，只发给触发式扩展）。
+    /// 用户触发了该扩展的命令（定向，只发给后处理扩展）。
     Command,
     /// 用户点击了该扩展块上的 invoke 操作（定向）。
     Action,
-    /// hook：输入已准备好，交给触发式扩展处理（由 Sayso 广播）。
+    /// hook：输入已准备好，交给后处理扩展处理（由 Sayso 广播）。
     Input,
-    /// hook：触发式扩展翻译完毕（由触发式扩展广播）。
+    /// hook：后处理扩展翻译完毕（由后处理扩展广播）。
     Translated,
     /// hook：文字已写入前台应用（由 Sayso 广播）。
     Inserted,
@@ -41,11 +41,11 @@ pub fn event_name(event: EventType) -> String {
     event.name().to_owned()
 }
 
-/// 命令输入的来源，由路由决定。
+/// 命令输入的来源，由用户为命令的快捷键设置。
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, Serialize, Deserialize, uniffi::Enum)]
 #[serde(rename_all = "lowercase")]
 pub enum InputSource {
-    /// 按住（或按一下开始 / 结束）入口键说的一句话，识别原文可能夹杂本地语言。
+    /// 按住（或按一下开始 / 结束）快捷键说的一句话，识别原文可能夹杂本地语言。
     Speech,
     /// 前台应用中当前选中的文本。
     Selection,
@@ -154,13 +154,17 @@ pub enum ActionOrigin {
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub struct Translation {
     pub input: Input,
-    /// 译文：语音翻译为写入的整句，划词翻译为译文。
+    /// 译文：混说翻译为写入的整句，互译为译文。
     pub output: String,
     /// 没有需要翻译的片段（如纯目标语言输入）或译为第三种语言时为空。
     pub pairs: Vec<TranslationPair>,
     /// 词对所在的目标语言整句（语音输入写入的句子）；划词没有上下文时为 null。
     #[serde(default)]
     pub context: Option<String>,
+    /// 候选框中展示整次翻译的块（如混说翻译的整句、互译的译文）的引用（`来源 id/块 id`），由广播者指明；
+    /// 订阅者用它调用 `sayso.blocks.attach` 附加针对整次翻译的按钮。没有候选框时为 null。
+    #[serde(default)]
+    pub card: Option<String>,
     #[serde(default)]
     pub source: Option<AppInfo>,
 }
@@ -171,6 +175,10 @@ pub struct TranslationPair {
     pub target: String,
     /// 本地语言一侧。
     pub native: String,
+    /// 候选框中该词对的词条卡片引用（`来源 id/块 id`），由 Sayso 广播时填写，扩展发布时无需提供；
+    /// 订阅者用它调用 `sayso.blocks.attach` 在卡片上附加按钮。同一词条的词对共用一张卡片，没有候选框时为 null。
+    #[serde(default)]
+    pub card: Option<String>,
 }
 
 impl Event {

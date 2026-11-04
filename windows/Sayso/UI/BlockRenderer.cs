@@ -11,7 +11,9 @@ internal static class BlockRenderer
 {
     internal enum Placement { Tab, Candidate }
 
-    public static UIElement Render(JsonNode block, Action<JsonNode> perform, Func<string, string, string> localize, Placement placement = Placement.Tab)
+    /// <param name="attachments">其他扩展附加在块上的按钮（仅候选框），排在块自身的操作之后，点击时交给 <paramref name="performAttached"/>。</param>
+    public static UIElement Render(JsonNode block, Action<JsonNode> perform, Func<string, string, string> localize, Placement placement = Placement.Tab,
+        JsonArray? attachments = null, Action<JsonNode, JsonNode>? performAttached = null)
     {
         var content = Controls.Stack();
         content.Spacing = 6;
@@ -80,7 +82,6 @@ internal static class BlockRenderer
                 Grid.SetColumn(speak, 1);
                 termRow.Children.Add(pair);
                 termRow.Children.Add(speak);
-                content.Children.Add(termRow);
                 break;
             case "card":
                 var title = Controls.Text(Field("title")!, 14);
@@ -117,32 +118,67 @@ internal static class BlockRenderer
                 break;
             default: throw new InvalidOperationException($"Unsupported block type: {Field("type")}");
         }
-        if (block["actions"] is JsonArray { Count: > 0 } actions)
+        // 块自身的操作在前，其他扩展附加的按钮在后。
+        var buttons = new List<(JsonNode Action, Action Click)>();
+        if (block["actions"] is JsonArray actions)
         {
-            Panel panel = termRow is null ? new WrapPanel() : new StackPanel { Orientation = Orientation.Horizontal, Spacing = 6, VerticalAlignment = VerticalAlignment.Center };
             foreach (var action in actions)
             {
                 // 高亮片段已提供操作入口，与 macOS 一致，不再重复生成按钮。
                 if (action!["id"]?.GetValue<string>() is { } id && inlineActions.Contains(id)) continue;
                 if (placement == Placement.Candidate && action["type"]!.GetValue<string>() == "delete") continue;
-                var label = action!["label"]?.GetValue<string>() ?? action["type"]!.GetValue<string>() switch
-                { "speak" => localize("朗读", "Speak"), "copy" => localize("复制", "Copy"), "open" => localize("打开", "Open"), "insert" => localize("输入", "Insert"), "delete" => localize("删除", "Delete"), _ => localize("执行", "Run") };
-                var button = Controls.ChipButton(label, () => perform(action));
-                panel.Children.Add(button);
+                buttons.Add((action, () => perform(action)));
             }
-            if (panel.Children.Count > 0)
+        }
+        if (attachments is not null)
+        {
+            foreach (var attachment in attachments)
             {
-                if (termRow is null) content.Children.Add(panel);
-                else
-                {
-                    termRow.ColumnDefinitions.Add(new() { Width = GridLength.Auto });
-                    Grid.SetColumn(panel, 2);
-                    termRow.Children.Add(panel);
-                }
+                foreach (var action in attachment!["actions"]!.AsArray())
+                    buttons.Add((action!, () => performAttached!(attachment, action!)));
             }
+        }
+        var controls = buttons.Select(button => (UIElement)ActionButton(button.Action, button.Click, localize)).ToList();
+        if (termRow is not null && placement == Placement.Tab)
+        {
+            // 页签列表中按钮固定在词条行右侧，与 macOS 一致。
+            if (controls.Count > 0)
+            {
+                var panel = new StackPanel { Orientation = Orientation.Horizontal, Spacing = 6, VerticalAlignment = VerticalAlignment.Center };
+                foreach (var control in controls) panel.Children.Add(control);
+                termRow.ColumnDefinitions.Add(new() { Width = GridLength.Auto });
+                Grid.SetColumn(panel, 2);
+                termRow.Children.Add(panel);
+            }
+            content.Children.Add(termRow);
+        }
+        else if (termRow is not null)
+        {
+            // 候选框中词条与按钮共享一行，放不下时按钮换到下一行。
+            var row = new WrapPanel();
+            row.Children.Add(termRow);
+            foreach (var control in controls) row.Children.Add(control);
+            content.Children.Add(row);
+        }
+        else if (controls.Count > 0)
+        {
+            // 其他块的按钮另起一行，同样可换行。
+            var panel = new WrapPanel();
+            foreach (var control in controls) panel.Children.Add(control);
+            content.Children.Add(panel);
         }
         // 浮层已经有统一表面；页签条目保留独立卡片，避免候选框出现卡片套卡片。
         return placement == Placement.Candidate ? content : new Border { Padding = new(12), CornerRadius = new(8), Background = Controls.Brush("SaysoCard"), Child = content };
+    }
+
+    /// <summary>块操作按钮，块与候选框底栏共用：标签缺省时按类型显示，不可点击的按钮用于展示已完成的状态（如「已加入生词本」）。</summary>
+    public static Button ActionButton(JsonNode action, Action click, Func<string, string, string> localize)
+    {
+        var label = action["label"]?.GetValue<string>() ?? action["type"]!.GetValue<string>() switch
+        { "speak" => localize("朗读", "Speak"), "copy" => localize("复制", "Copy"), "open" => localize("打开", "Open"), "insert" => localize("输入", "Insert"), "delete" => localize("删除", "Delete"), _ => localize("执行", "Run") };
+        var button = Controls.ChipButton(label, click);
+        button.IsEnabled = action["disabled"]?.GetValue<bool>() != true;
+        return button;
     }
 
     private static TextBlock SingleLine(string text, double size, double opacity = 1)

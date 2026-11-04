@@ -37,8 +37,8 @@ final class CoreModel {
             // bundle-app.sh 从发布 tag 写入 Info.plist。
             appVersion: Bundle.main.object(forInfoDictionaryKey: "CFBundleShortVersionString") as! String,
             defaults: PlatformDefaults(
-                triggerKey: .rightOption,
-                selectionRouteKey: UInt16(kVK_ANSI_T),
+                speechShortcut: .rightOption,
+                selectionShortcut: .optionT,
                 speechRate: AVSpeechUtteranceDefaultSpeechRate
             ),
             platform: platform,
@@ -145,22 +145,18 @@ final class CoreModel {
         }
     }
 
-    func route(of command: CommandKey) -> RouteKey? {
-        settings.commandBindings.first { $0.command == command }?.route
+    /// 命令的快捷键及其输入来源。
+    func shortcut(of command: CommandKey) -> (key: Hotkey, input: InputSource)? {
+        settings.shortcuts.first { $0.value.command == command }.map { ($0.key, $0.value.input) }
     }
 
-    func input(of route: RouteKey) -> InputSource? {
-        settings.routes.first { $0.key == route }?.input
+    /// 宿主只提交编辑意图：快捷键被其他命令占用时的移交、输入来源的保留由 core 统一处理。
+    func setShortcut(_ key: Hotkey?, of command: CommandKey) {
+        applySettingsChange { try core.setShortcut(command: command, key: key) }
     }
 
-    /// 宿主只提交编辑意图，路由的继承、共享与清理由 core 统一处理。
-    func setRoute(_ route: RouteKey?, of command: CommandKey) {
-        applySettingsChange { try core.bindCommand(command: command, route: route) }
-    }
-
-    /// 路由的输入来源；同一路由上的全部命令收到同一份输入。
-    func setInput(_ input: InputSource, of route: RouteKey) {
-        applySettingsChange { try core.setRouteInput(route: route, input: input) }
+    func setInput(_ input: InputSource, of command: CommandKey) {
+        applySettingsChange { try core.setShortcutInput(command: command, input: input) }
     }
 
     func storeRevision(_ id: String) -> Int {

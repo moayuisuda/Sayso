@@ -10,20 +10,31 @@ struct BlockView: View {
 
     let block: Block
     let placement: Placement
+    /// 其他扩展附加在块上的按钮（仅候选框），排在块自身的操作之后。
+    var attachments: [Attachment] = []
     let perform: (BlockAction) -> Void
+    /// 点击附加的按钮，由附加方处理。
+    var performAttached: (Attachment, BlockAction) -> Void = { _, _ in }
 
     var body: some View {
-        // 词条与状态是单行内容，按钮跟在同一行末尾（页签列表中靠右对齐）；其他块的按钮另起一行。
-        if isSingleLine {
+        // 词条与状态是单行内容，按钮跟在同一行末尾，放不下时换行（页签列表中靠右对齐）；其他块的按钮另起一行，同样可换行。
+        if isSingleLine, placement == .tab {
             HStack(spacing: 8) {
                 content
-                if placement == .tab { Spacer(minLength: 8) }
+                Spacer(minLength: 8)
+                HStack(spacing: 6) { buttons }
+            }
+        } else if isSingleLine {
+            FlowLayout(spacing: 6) {
+                content
                 buttons
             }
         } else {
             VStack(alignment: .leading, spacing: 6) {
                 content
-                buttons
+                if hasButtons {
+                    FlowLayout(spacing: 6) { buttons }
+                }
             }
         }
     }
@@ -35,13 +46,19 @@ struct BlockView: View {
         }
     }
 
+    private var hasButtons: Bool {
+        !buttonActions.isEmpty || !attachments.isEmpty
+    }
+
+    /// 块自身的操作在前，其他扩展附加的按钮在后；逐个作为布局的子视图，由外层决定排列与换行。
     @ViewBuilder
     private var buttons: some View {
-        if !buttonActions.isEmpty {
-            HStack(spacing: 6) {
-                ForEach(Array(buttonActions.enumerated()), id: \.offset) { _, action in
-                    ActionButton(action: action) { perform(action) }
-                }
+        ForEach(Array(buttonActions.enumerated()), id: \.offset) { _, action in
+            ActionButton(action: action) { perform(action) }
+        }
+        ForEach(attachments, id: \.sourceId) { attachment in
+            ForEach(Array(attachment.actions.enumerated()), id: \.offset) { _, action in
+                ActionButton(action: action) { performAttached(attachment, action) }
             }
         }
     }
@@ -53,7 +70,7 @@ struct BlockView: View {
             TextBlockView(block: block, runs: runs, role: role, perform: perform)
         case .term(let term, let gloss, let language, let detail):
             TermBlockView(term: term, gloss: gloss, detail: detail) {
-                perform(BlockAction(id: nil, label: nil, kind: .speak(text: term, language: language)))
+                perform(BlockAction(id: nil, label: nil, disabled: false, kind: .speak(text: term, language: language)))
             }
         case .card(let title, let subtitle, let body):
             VStack(alignment: .leading, spacing: 3) {
@@ -161,7 +178,8 @@ private struct TermBlockView: View {
     }
 }
 
-private struct ActionButton: View {
+/// 块操作按钮，块与候选框底栏共用。
+struct ActionButton: View {
     let action: BlockAction
     let run: () -> Void
 
@@ -170,6 +188,7 @@ private struct ActionButton: View {
             Label(title, systemImage: icon)
         }
         .buttonStyle(.chip)
+        .disabled(action.disabled)
     }
 
     private var isDestructive: Bool {
@@ -190,6 +209,8 @@ private struct ActionButton: View {
     }
 
     private var icon: String {
+        // 不可点击的按钮用于展示已完成的状态。
+        if action.disabled { return "checkmark" }
         switch action.kind {
         case .speak: return "speaker.wave.2.fill"
         case .copy: return "doc.on.doc"

@@ -38,6 +38,10 @@ impl Inner {
             }
             _ => None,
         };
+        let focus = match &event.payload {
+            Payload::Focus { app } => Some(app.clone()),
+            _ => None,
+        };
 
         for plugin in recipients {
             let manifest = &plugin.manifest;
@@ -48,6 +52,7 @@ impl Inner {
                 title: (!manifest.is_built_in()).then(|| manifest.name.clone()),
                 surface_id: surface_id.clone(),
                 command: command.clone(),
+                focus: focus.clone(),
             });
             let (inner, event, route, surface_id) = (self.clone(), event.clone(), route.clone(), surface_id.clone());
             self.runtime.spawn(async move {
@@ -55,6 +60,23 @@ impl Inner {
                 inner.finish_run(result, surface_id.as_deref(), &route);
             });
         }
+    }
+
+    /// 前台应用切换：同一应用的重复上报（如切换窗口）不广播。
+    pub(crate) fn app_focused(self: &Arc<Self>, app: Option<AppInfo>) {
+        let mut focused = self.focused.lock().unwrap();
+        if focused.as_ref() == Some(&app) {
+            return;
+        }
+        *focused = Some(app.clone());
+        drop(focused);
+        self.dispatch(Payload::Focus { app }, None, Route::Republished { by: APP_SOURCE.into() });
+    }
+
+    /// 让扩展按当前前台应用重新处理一次，用于它刚启用或数据刚变化时。
+    pub(crate) fn refresh_focus(self: &Arc<Self>, extension_id: String) {
+        let Some(app) = self.focused.lock().unwrap().clone() else { return };
+        self.dispatch(Payload::Focus { app }, None, Route::Target { extension_id, reports_failure: false });
     }
 
     /// 修改指定候选框；它已不在展示时返回 None。
@@ -126,6 +148,8 @@ struct DispatchHost {
     title: Option<String>,
     surface_id: Option<String>,
     command: Option<CommandContext>,
+    /// 处理 `focus` 事件时，事件对应的应用。
+    focus: Option<Option<AppInfo>>,
 }
 
 #[async_trait]
@@ -155,6 +179,13 @@ impl Host for DispatchHost {
             Instruction::Store(write) => {
                 self.inner.stores.apply(&self.extension_id, write)?;
                 self.inner.observer.store_changed(self.extension_id.clone());
+            }
+            Instruction::SetContext(text) => {
+                // 每个事件各自运行，快速切换时旧事件可能后完成，不能覆盖当前应用的背景。
+                let current = self.focus.as_ref().is_none_or(|app| self.inner.focused.lock().unwrap().as_ref() == Some(app));
+                if current {
+                    self.inner.set_context(&text);
+                }
             }
             Instruction::Speak { text, language } => {
                 let settings = self.inner.settings();
@@ -201,7 +232,7 @@ impl Host for DispatchHost {
 
     async fn complete(&self, system: String, user: String) -> Result<String, CoreError> {
         let endpoint = self.inner.llm_endpoint().ok_or(CoreError::ModelNotConfigured)?;
-        let system = with_user_context(&system, &self.inner.settings().user_context);
+        let system = with_user_context(&system, &self.inner.context());
         endpoint.complete(&self.inner.http, &system, &user).await
     }
 

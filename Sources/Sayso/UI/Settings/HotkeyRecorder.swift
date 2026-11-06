@@ -4,14 +4,16 @@ import SaysoCore
 import SwiftUI
 
 /// 键帽输入框：点击后捕获按键，录制中显示主题色描边；Esc 或再次点击取消。
-/// 按键如何解释由调用方的 `capture` 决定，返回 true 表示录制完成。
+/// 按键如何解释由调用方的 `capture` 决定，返回 true 表示录制完成。提供 `clear` 时，悬停在框上会显示清除按钮。
 struct KeyCaptureField<Value: View>: View {
     let prompt: String
     let monitor: HotkeyMonitor
     let capture: (NSEvent) -> Bool
+    var clear: (() -> Void)?
     @ViewBuilder let value: Value
 
     @State private var isRecording = false
+    @State private var isHovering = false
     @State private var eventMonitor: Any?
 
     var body: some View {
@@ -30,6 +32,18 @@ struct KeyCaptureField<Value: View>: View {
                 .contentShape(Rectangle())
         }
         .buttonStyle(.plain)
+        .overlay(alignment: .trailing) {
+            if let clear, isHovering, !isRecording {
+                Button(action: clear) {
+                    Image(systemName: "xmark.circle.fill")
+                        .foregroundStyle(.secondary)
+                }
+                .buttonStyle(.plain)
+                .padding(.trailing, 7)
+                .help(L("清除", "Clear"))
+            }
+        }
+        .onHover { isHovering = $0 }
         .onDisappear(perform: finish)
     }
 
@@ -76,7 +90,12 @@ struct HotkeyRecorder: View {
     @State private var pendingModifier: UInt16?
 
     var body: some View {
-        KeyCaptureField(prompt: L("请按下快捷键…", "Press a shortcut…"), monitor: monitor, capture: capture) {
+        KeyCaptureField(
+            prompt: L("请按下快捷键…", "Press a shortcut…"),
+            monitor: monitor,
+            capture: capture,
+            clear: hotkey == nil ? nil : { hotkey = nil }
+        ) {
             if let hotkey {
                 KeycapRow(keys: hotkey.keycaps)
             } else {

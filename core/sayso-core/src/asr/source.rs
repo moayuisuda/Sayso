@@ -206,10 +206,10 @@ impl Service {
     }
 
     /// 由全部填写完整的配置项生成识别配置。
-    fn config(self, values: &HashMap<String, String>, settings: &Settings) -> AsrConfig {
+    fn config(self, values: &HashMap<String, String>, settings: &Settings, context: &str) -> AsrConfig {
         let value = |key: &str| values[key].clone();
         let languages = settings.languages();
-        let context = settings.user_context.trim().to_string();
+        let context = context.trim().to_string();
         match self {
             Self::Volcengine => AsrConfig::Volcengine { api_key: value(API_KEY), resource_id: value(MODEL), context },
             Self::Qwen => AsrConfig::Qwen { api_key: value(API_KEY), languages, context },
@@ -248,7 +248,7 @@ pub(crate) fn field_value(source_id: &str, field: &AsrField, settings: &Settings
 }
 
 /// 按设置生成本次录音的识别配置；来源不可用或有配置项未填写时为 None。
-pub(crate) fn config(settings: &Settings, secrets: &Secrets) -> Option<AsrConfig> {
+pub(crate) fn config(settings: &Settings, secrets: &Secrets, context: &str) -> Option<AsrConfig> {
     let id = settings.asr_source.as_str();
     let service = Service::find(id)?;
     let values = service
@@ -260,7 +260,7 @@ pub(crate) fn config(settings: &Settings, secrets: &Secrets) -> Option<AsrConfig
             (!field.required || !value.trim().is_empty()).then(|| (field.key.clone(), value.trim().to_string()))
         })
         .collect::<Option<HashMap<_, _>>>()?;
-    Some(service.config(&values, settings))
+    Some(service.config(&values, settings, context))
 }
 
 #[cfg(test)]
@@ -288,12 +288,12 @@ mod tests {
     fn config_combines_secrets_stored_options_and_defaults() {
         let mut settings = settings(OPENAI_COMPATIBLE);
         assert!(
-            matches!(config(&settings, &Secrets::default()), Some(AsrConfig::OpenAiCompatible { api_key, .. }) if api_key.is_empty())
+            matches!(config(&settings, &Secrets::default(), ""), Some(AsrConfig::OpenAiCompatible { api_key, .. }) if api_key.is_empty())
         );
 
         settings.asr_options.insert(OPENAI_COMPATIBLE.into(), HashMap::from([(MODEL.into(), " whisper-1 ".into())]));
         let Some(AsrConfig::OpenAiCompatible { api_key, base_url, model, .. }) =
-            config(&settings, &secret(OPENAI_COMPATIBLE, "sk"))
+            config(&settings, &secret(OPENAI_COMPATIBLE, "sk"), "")
         else {
             panic!("expected an OpenAI compatible config");
         };
@@ -304,15 +304,16 @@ mod tests {
 
         // 用户清空的配置项不回落到默认值，视为未填写。
         settings.asr_options.insert(OPENAI_COMPATIBLE.into(), HashMap::from([(BASE_URL.into(), String::new())]));
-        assert!(config(&settings, &secret(OPENAI_COMPATIBLE, "sk")).is_none());
+        assert!(config(&settings, &secret(OPENAI_COMPATIBLE, "sk"), "").is_none());
     }
 
     #[test]
-    fn qwen_requires_a_key_and_carries_the_user_context() {
-        let mut settings = settings(QWEN);
-        assert!(config(&settings, &Secrets::default()).is_none());
-        settings.user_context = " I am a software engineer. ".into();
-        let Some(AsrConfig::Qwen { context, .. }) = config(&settings, &secret(QWEN, "key")) else {
+    fn qwen_requires_a_key_and_carries_the_context() {
+        let settings = settings(QWEN);
+        assert!(config(&settings, &Secrets::default(), "").is_none());
+        let Some(AsrConfig::Qwen { context, .. }) =
+            config(&settings, &secret(QWEN, "key"), " I am a software engineer. ")
+        else {
             panic!("expected Qwen config")
         };
         assert_eq!(context, "I am a software engineer.");

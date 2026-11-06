@@ -12,6 +12,7 @@ extension Capability {
         case .llm: return "sparkles"
         case .publish: return "dot.radiowaves.left.and.right"
         case .fs: return "folder"
+        case .context: return "text.bubble"
         }
     }
 }

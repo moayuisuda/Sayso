@@ -7,5 +7,5 @@
   "timeoutSeconds": 40,
   "events": ["command"],
   "capabilities": ["blocks", "publish", "llm"],
-  "commands": [{ "id": "translate", "title": "划词翻译 / Translate selection" }]
+  "commands": [{ "id": "translate", "title": "触发划词", "titleEn": "Trigger selection", "input": "selection" }]
 }

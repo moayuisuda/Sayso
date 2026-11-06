@@ -156,6 +156,62 @@ internal sealed partial class SettingsWindow
         if (await picker.PickSaveFileAsync() is { } file) await core!.Call("exportPackage", new JsonObject { ["id"] = id, ["path"] = file.Path });
     }
 
+    private JsonNode? Manifest(string id) => extensions.FirstOrDefault(e => e!["manifest"]!["id"]!.GetValue<string>() == id)?["manifest"];
+    private JsonNode? AppTableSpec(string id) => Manifest(id)?["tab"]?["appTable"];
+
+    /// <summary>「按应用配置」页签：顶部是固定的默认行，下方每行左边选应用、右边填文本，末尾加号加一行。</summary>
+    private async Task<UIElement> AppTablePage(string id, JsonNode spec)
+    {
+        var table = (await core!.Call("appTable", JsonValue.Create(id)))!;
+        var apps = table["apps"]!.AsArray();
+        var rows = table["rows"]!.AsArray();
+        Task Save(string key, JsonNode? app, string text) =>
+            core.Call("saveAppRow", new JsonObject { ["id"] = id, ["key"] = key, ["app"] = app?.DeepClone(), ["text"] = text });
+        TextBox Field(string value, Action<string> changed)
+        {
+            var field = Controls.Field(value, changed, spec["placeholder"]?.GetValue<string>() ?? "");
+            field.Width = double.NaN;
+            field.HorizontalAlignment = HorizontalAlignment.Stretch;
+            field.TextWrapping = TextWrapping.Wrap;
+            field.MaxLength = spec["maxLength"]!.GetValue<int>();
+            return field;
+        }
+        static Grid Line(UIElement leading, UIElement field)
+        {
+            var line = new Grid { ColumnSpacing = 12 };
+            line.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(210) });
+            line.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(1, GridUnitType.Star) });
+            Grid.SetColumn((FrameworkElement)field, 1);
+            line.Children.Add(leading);
+            line.Children.Add(field);
+            return line;
+        }
+        UIElement AppLine(JsonNode row)
+        {
+            var key = row["key"]!.GetValue<string>();
+            var app = row["app"];
+            var text = row["text"]!.GetValue<string>();
+            var chosen = app?["id"]?.GetValue<string>() ?? "";
+            // 已被其他行选中的应用不可选。
+            var taken = rows.Where(r => r!["key"]!.GetValue<string>() != key).Select(r => r!["app"]?["id"]?.GetValue<string>()).ToHashSet();
+            var options = apps.Select(a => (a!["id"]!.GetValue<string>(), a["name"]?.GetValue<string>() ?? a["id"]!.GetValue<string>())).Prepend(("", L("选择应用", "Choose an app")));
+            var choice = Controls.Choice(options, chosen, value =>
+            {
+                app = apps.FirstOrDefault(a => a!["id"]!.GetValue<string>() == value);
+                Run(() => Save(key, app, text));
+            }, value => !taken.Contains(value));
+            choice.MinWidth = 170;
+            choice.MaxWidth = 170;
+            var remove = Controls.IconButton("\uE738", L("删除这一行", "Remove this row"), () => Run(() => core.Call("deleteRecord", new JsonObject { ["id"] = id, ["key"] = key })));
+            return Line(Controls.Horizontal(choice, remove), Field(text, value => { text = value; Run(() => Save(key, app, text)); }));
+        }
+        var defaultLine = Line(Controls.Text(L("默认", "Default")), Field(table["defaultText"]!.GetValue<string>(), value => Run(() => Save("default", null, value))));
+        var add = Controls.IconButton("\uE710", L("添加应用", "Add an app"), () => Run(() => core.Call("addAppRow", JsonValue.Create(id))));
+        var description = Manifest(id)?["description"]?.GetValue<string>() ?? "";
+        var lines = rows.Select(row => AppLine(row!)).Prepend(defaultLine).Append(add).ToArray();
+        return Controls.Page(Controls.Stack(Controls.Text(description, 11, 0.65), Controls.Card(lines)));
+    }
+
     private async Task<UIElement> ExtensionPage(string id, string query)
     {
         var rows = Controls.Stack();

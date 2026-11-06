@@ -12,7 +12,7 @@ use sayso_core::protocol::{
     Input, InputSource, Language, LanguagePair, Payload, SurfaceSnapshot, TextStyle, Tone, Translation,
     TranslationPair,
 };
-use sayso_core::store::{StoreRecord, Stores};
+use sayso_core::store::{StoreRecord, StoreWrite, Stores};
 
 /// 记录插件输出的宿主替身：模型固定回复，数据写入临时目录，其余指令按顺序记下。
 struct FakeHost {
@@ -192,6 +192,31 @@ async fn run_dictation(transcript: &str, reply: &str, delivery: Delivery) -> (Ru
 }
 
 /// 混说翻译后写入译文（译文可连带改写相邻词 a → an），输出文本块与剪贴板提示，朗读翻译块，最后广播词对。
+/// 用给定的表运行应用背景扩展，返回它设置的背景。
+async fn context_for(rows: &[(&str, Option<&str>, &str)], app: Option<&str>) -> Vec<Instruction> {
+    let (_directory, stores) = temporary_stores();
+    for (key, app_id, text) in rows {
+        let record = serde_json::json!({ "appId": app_id, "text": text }).as_object().unwrap().clone();
+        stores.apply("sayso.context", StoreWrite::Put { collection: "contexts".into(), key: (*key).into(), record }).unwrap();
+    }
+    let host = FakeHost::new("sayso.context", "", Delivery::Inserted, stores);
+    let app = app.map(|id| AppInfo { id: Some(id.into()), name: None });
+    let event = Event::new(LanguagePair::default(), None, Payload::Focus { app });
+    assert_eq!(run(&built_in("sayso.context"), &event, host.clone()).await.status, RunStatus::Succeeded);
+    host.instructions()
+}
+
+#[tokio::test]
+async fn app_context_prefers_the_app_row_and_falls_back_to_the_default_row() {
+    let rows = [("default", None, "base"), ("a", Some("id.xcode"), "swift"), ("b", Some("id.slack"), "  ")];
+    let set = |text: &str| vec![Instruction::SetContext(text.into())];
+    assert_eq!(context_for(&rows, Some("id.xcode")).await, set("swift"));
+    assert_eq!(context_for(&rows, Some("id.notes")).await, set("base"));
+    assert_eq!(context_for(&rows, Some("id.slack")).await, set("base"));
+    assert_eq!(context_for(&rows, None).await, set("base"));
+    assert_eq!(context_for(&[], Some("id.xcode")).await, set(""));
+}
+
 #[tokio::test]
 async fn dictation_translates_inserts_speaks_and_publishes() {
     let reply = r#"{"segments":[{"from":1,"to":2,"text":"I have "},{"from":3,"to":4,"text":"an apple"},{"from":5,"to":5,"text":"."}]}"#;

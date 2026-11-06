@@ -63,7 +63,9 @@ internal sealed class HotkeyMonitor : IDisposable
         }
         if (down && fresh && key.Key == 0x1B)
         {
+            // 录音或处理中由核心取消，展示结果时关闭候选框；两者互斥，另一个调用不起作用。
             dispatch(() => core.Call("cancel"));
+            dismissCandidate();
             // Esc 仍传给前台应用，避免在空闲时吞掉系统按键。
         }
         // 修饰键本身不计入修饰位：单修饰键快捷键要求没有按着其他修饰键。

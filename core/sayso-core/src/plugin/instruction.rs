@@ -32,6 +32,8 @@ pub enum Instruction {
         /// 广播者展示整次翻译的块 id（本插件的块，不带前缀）。
         card: String,
     },
+    /// 替换提供给语音识别与翻译模型的背景。
+    SetContext(String),
 }
 
 /// prelude 传来的 JSON 形式：`{"op": …, …字段}`。
@@ -61,6 +63,8 @@ enum Wire {
     Speak { text: String, language: Language },
     #[serde(rename = "publish")]
     Publish { event: PublishedEvent },
+    #[serde(rename = "context.set")]
+    ContextSet { text: String },
 }
 
 /// 只能广播 `translated`；定向事件与 Sayso 自己发出的 `input`、`inserted` 不能由插件广播。
@@ -101,6 +105,7 @@ impl Instruction {
             Wire::Publish { event: PublishedEvent::Translated { output, pairs, context, card } } => {
                 Self::PublishTranslated { output, pairs, context, card }
             }
+            Wire::ContextSet { text } => Self::SetContext(text),
         })
     }
 
@@ -113,6 +118,7 @@ impl Instruction {
             Self::Store(_) => vec![Capability::Store],
             Self::Speak { .. } => vec![],
             Self::PublishTranslated { .. } => vec![Capability::Publish],
+            Self::SetContext(_) => vec![Capability::Context],
         }
     }
 }

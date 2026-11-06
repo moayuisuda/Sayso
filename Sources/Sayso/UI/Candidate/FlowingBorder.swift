@@ -4,12 +4,14 @@ import SwiftUI
 struct FlowingBorder: View {
     let level: AudioLevel
     let cornerRadius: CGFloat
+    /// 非录音时暂停逐帧绘制，隐藏的流光不占用刷新。
+    let isActive: Bool
 
     @State private var motion = FlowMotion()
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
 
     var body: some View {
-        TimelineView(.animation) { timeline in
+        TimelineView(.animation(minimumInterval: nil, paused: !isActive)) { timeline in
             let frame = motion.advance(to: timeline.date, target: level.current, flowing: !reduceMotion)
             FlowingGlow(level: CGFloat(frame.level), flow: frame.flow, cornerRadius: cornerRadius)
         }

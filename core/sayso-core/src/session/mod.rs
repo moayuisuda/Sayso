@@ -410,6 +410,6 @@ impl Inner {
 
     /// 按设置生成本次录音的识别配置；缺少必填项或来源不可用时为 None。
     fn asr_config(&self, settings: &Settings) -> Option<AsrConfig> {
-        source::config(settings, &self.secrets())
+        source::config(settings, &self.secrets(), &self.context())
     }
 }

@@ -29,6 +29,8 @@ pub trait Platform: Send + Sync {
     /// 把文字写入目标应用；没有可写入的位置时只放入剪贴板。
     async fn insert_text(&self, text: String, destination: Option<AppInfo>) -> Result<Delivery, PlatformError>;
     fn frontmost_app(&self) -> Option<AppInfo>;
+    /// 正在运行、有窗口的应用，`id` 跨次运行稳定。
+    fn running_apps(&self) -> Vec<AppInfo>;
     /// 开始朗读；缺少对应语言语音或无法启动播放时返回可展示的原因。
     fn speak(&self, text: String, language: Language, rate: f32) -> Result<(), PlatformError>;
     fn stop_speaking(&self);

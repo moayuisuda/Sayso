@@ -21,6 +21,8 @@ pub enum EventType {
     Translated,
     /// hook：文字已写入前台应用（由 Sayso 广播）。
     Inserted,
+    /// hook：前台应用切换（由 Sayso 广播）。
+    Focus,
 }
 
 impl EventType {
@@ -31,6 +33,7 @@ impl EventType {
             Self::Input => "input",
             Self::Translated => "translated",
             Self::Inserted => "inserted",
+            Self::Focus => "focus",
         }
     }
 }
@@ -123,6 +126,10 @@ pub enum Payload {
         /// 发出写入的扩展。
         by: String,
     },
+    Focus {
+        /// 切换到的应用；回到 Sayso 自身或没有前台应用时为 null。
+        app: Option<AppInfo>,
+    },
 }
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
@@ -199,6 +206,7 @@ impl Event {
             Payload::Input { .. } => EventType::Input,
             Payload::Translated(_) => EventType::Translated,
             Payload::Inserted { .. } => EventType::Inserted,
+            Payload::Focus { .. } => EventType::Focus,
         }
     }
 

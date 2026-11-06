@@ -35,18 +35,11 @@ internal sealed partial class SettingsWindow
         autoSpeak.Click += (_, _) => Run(() => Save("autoSpeak", JsonValue.Create(autoSpeak.IsChecked == true)));
         var rate = Controls.Accented(new Slider { Minimum = 0.3, Maximum = 0.6, Value = Settings["speechRate"]!.GetValue<double>(), Width = 180, StepFrequency = 0.01 });
         rate.ValueChanged += (_, _) => Run(() => Save("speechRate", JsonValue.Create(rate.Value)));
-        var userContext = Controls.Field(Settings["userContext"]!.GetValue<string>(), value => Run(() => Save("userContext", JsonValue.Create(value))),
-            L("例如：我是软件工程师，常说编程与云服务术语", "e.g. I'm a software engineer and often use programming and cloud terms"));
-        userContext.TextWrapping = TextWrapping.Wrap;
         return Controls.Page(
             Controls.Section(L("语言", "Languages"),
                 Controls.Row(L("目标语言", "Target language"), SettingChoice("targetLanguage", Options(languages), enabled: value => Recognizes(SelectedAsrSource, value)), LanguageCaption()),
-                Controls.Row(L("本地语言", "Native language"), SettingChoice("nativeLanguage", Options(languages), true, value => Recognizes(SelectedAsrSource, value)), L("不会说的词直接用本地语言说，会自动翻译成目标语言。", "Say unfamiliar words in your native language to translate them in place.")),
-                Controls.Row(L("翻译背景", "Translation background"), userContext, L("提供给语音识别与翻译模型，让专业词汇更准确。写明你的身份或常说的领域即可。", "Shared with the speech and translation models so domain terms come out right. Describe your role or the topics you usually talk about."))),
-            Controls.Section(L("快捷键", "Shortcuts"), new UIElement[]
-                {
-                    Controls.Row(L("触发方式", "Mode"), SettingChoice("hotkeyStyle", [("hold", L("按住说话", "Hold to talk")), ("toggle", L("按一下开始 / 结束", "Press to toggle"))]), L("语音快捷键的用法。录音或识别过程中按 Esc 取消。", "How speech shortcuts work. Press Esc to cancel recording or recognition.")),
-                }.Concat(ShortcutRows()).ToArray()),
+                Controls.Row(L("本地语言", "Native language"), SettingChoice("nativeLanguage", Options(languages), true, value => Recognizes(SelectedAsrSource, value)), L("不会说的词直接用本地语言说，会自动翻译成目标语言。", "Say unfamiliar words in your native language to translate them in place."))),
+            Controls.Section(L("快捷键", "Shortcuts"), ShortcutRows().ToArray()),
             Controls.Section(L("朗读", "Pronunciation"),
                 Controls.Row(L("自动朗读", "Read aloud"), autoSpeak),
                 Controls.Row(L("系统语音", "System voices"), Controls.Button(L("管理朗读语音", "Manage voices"), () => WindowsPlatform.Open("ms-settings:speech")),
@@ -59,10 +52,12 @@ internal sealed partial class SettingsWindow
         );
     }
 
-    /// 已启用扩展的命令各一行：快捷键（单修饰键或组合键，点击后录制）与命令收到的输入。
+    /// 已启用扩展的命令各一行：快捷键（单修饰键或组合键，点击后录制），以及命令没有固定输入时的输入来源。
+    /// 触发方式对所有语音快捷键生效，只显示在第一个语音命令下。
     /// 一个快捷键只对应一个命令，设成其他命令的快捷键时那个命令的快捷键被清除。
     private IEnumerable<UIElement> ShortcutRows()
     {
+        var modeShown = false;
         foreach (var info in extensions.Where(e => e!["enabled"]!.GetValue<bool>()))
         {
             var manifest = info!["manifest"]!;
@@ -79,14 +74,30 @@ internal sealed partial class SettingsWindow
                     Hotkeys!.KeyRecorded = (code, modifiers) => Run(() => SetShortcut(extension, commandId, new JsonObject { ["keyCode"] = code, ["modifiers"] = modifiers }));
                     Hotkeys.IsRecordingKey = true;
                 };
-                var controls = Controls.Horizontal(recorder);
+                recorder.MinWidth = 130;
+                var field = new Grid();
+                field.Children.Add(recorder);
+                var controls = Controls.Horizontal(field);
                 if (shortcut is not null)
                 {
-                    controls.Children.Add(Controls.Choice([("speech", L("语音输入", "Speech")), ("selection", L("选中文本", "Selected text"))], shortcut["input"]!.GetValue<string>(),
-                        value => Run(() => SetShortcutInput(extension, commandId, value))));
-                    controls.Children.Add(Controls.Button(L("清除", "Clear"), () => Run(() => SetShortcut(extension, commandId, null))));
+                    // 清除按钮在框内，只在悬停时显示。
+                    var clear = Controls.IconButton("\uE711", L("清除", "Clear"), () => Run(() => SetShortcut(extension, commandId, null)));
+                    clear.HorizontalAlignment = HorizontalAlignment.Right;
+                    clear.Margin = new(0, 0, 4, 0);
+                    clear.Visibility = Visibility.Collapsed;
+                    field.Children.Add(clear);
+                    field.PointerEntered += (_, _) => clear.Visibility = Visibility.Visible;
+                    field.PointerExited += (_, _) => clear.Visibility = Visibility.Collapsed;
+                    if (!modeShown && shortcut["input"]!.GetValue<string>() == "speech")
+                    {
+                        modeShown = true;
+                        controls.Children.Add(SettingChoice("hotkeyStyle", [("hold", L("按住说话", "Hold to talk")), ("toggle", L("按一下开始 / 结束", "Press to toggle"))]));
+                    }
+                    if (command["input"] is null)
+                        controls.Children.Add(Controls.Choice([("speech", L("语音输入", "Speech")), ("selection", L("选中文本", "Selected text"))], shortcut["input"]!.GetValue<string>(),
+                            value => Run(() => SetShortcutInput(extension, commandId, value))));
                 }
-                yield return Controls.Row(command["title"]!.GetValue<string>(), controls, manifest["name"]!.GetValue<string>());
+                yield return Controls.Row(command["title"]!.GetValue<string>(), controls);
             }
         }
     }

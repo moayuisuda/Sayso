@@ -43,6 +43,10 @@ final class MacPlatform: Platform, @unchecked Sendable {
         AppInfo.frontmost()
     }
 
+    func runningApps() -> [AppInfo] {
+        AppInfo.running()
+    }
+
     func speak(text: String, language: Language, rate: Float) throws {
         try onMainSync { try self.pronouncer.speak(text, in: language, rate: rate) }
     }

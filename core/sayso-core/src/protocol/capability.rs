@@ -16,6 +16,8 @@ pub enum Capability {
     Publish,
     /// 读写扩展目录与用户指定路径中的文件（`sayso.fs`）。
     Fs,
+    /// 设置提供给语音识别与翻译模型的背景（`sayso.context`）。
+    Context,
 }
 
 impl Capability {
@@ -27,6 +29,7 @@ impl Capability {
             Self::Llm => "llm",
             Self::Publish => "publish",
             Self::Fs => "fs",
+            Self::Context => "context",
         }
     }
 }

@@ -4,6 +4,7 @@
 uniffi::setup_scaffolding!();
 
 mod app;
+mod app_table;
 pub mod asr;
 pub mod error;
 pub mod extensions;
@@ -21,6 +22,7 @@ mod time_util;
 pub mod update;
 
 pub use app::{Core, PackageInfo, TabItem, TabItems};
+pub use app_table::{AppRow, AppTable, DEFAULT_ROW};
 pub use logging::{LogLevel, LogSink};
 pub use platform::{CoreObserver, Platform, PlatformError};
 pub use update::AppRelease;

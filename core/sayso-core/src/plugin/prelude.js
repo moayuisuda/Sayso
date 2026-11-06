@@ -22,6 +22,10 @@
     }),
     speak: (text, language) => emit("speak", { text, language }),
     publish: (event) => emit("publish", { event }),
+    context: Object.freeze({
+      /** 替换提供给语音识别与翻译模型的背景，下一次录音与模型请求生效。 */
+      set: (text) => emit("context.set", { text }),
+    }),
     llm: (system, user) => native.llm(system, user),
     insert: (text) => native.insert(text),
     text: Object.freeze({

@@ -81,7 +81,7 @@
 | `events` | 是 | 订阅的事件类型，至少一项，只会收到其中的事件 |
 | `capabilities` | 否 | 声明的能力，见下表 |
 | `tab` | 否 | 扩展页签，需同时声明 `store` 能力 |
-| `commands` | 否 | 命令 `[{ "id", "title" }]`，需同时订阅 `command` |
+| `commands` | 否 | 命令 `[{ "id", "title", "titleEn"?, "input"? }]`，需同时订阅 `command`。`titleEn` 为界面语言不是中文时显示的名称。`input` 为 `speech` 或 `selection` 时输入来源固定，设置中不显示选择 |
 
 | 能力 | 允许 |
 | --- | --- |
@@ -91,21 +91,22 @@
 | `llm` | `sayso.llm`，用用户在设置中配置的翻译模型补全，扩展不需要自带 API Key |
 | `publish` | `sayso.publish`，处理 `command` 时广播 `translated` hook |
 | `fs` | `sayso.fs.*`，读写扩展目录与用户配置的路径（如 Obsidian 库） |
+| `context` | `sayso.context.set`，设置提供给语音识别与翻译模型的背景 |
 
 外部扩展默认关闭。在「设置 → 扩展」启用时，Sayso 列出它订阅的事件与声明的能力，由用户确认。
 
 ### 命令与快捷键
 
-内置的命令是「混说翻译 · 语音输入」与「互译 · 划词翻译」；第三方扩展也可以声明命令。
+内置的命令是「混说翻译 · 语音输入」与「互译 · 触发划词」；第三方扩展也可以声明命令。
 用户在「设置 → 通用 → 快捷键」中为每个命令设置快捷键，并选择输入来源：
 
 | 命令 | 默认快捷键（macOS / Windows） | 输入 | 用法 |
 | --- | --- | --- | --- |
 | 语音输入 | 右 ⌥ / 右 Ctrl | 语音 | 按住说话，松开结束 |
-| 划词翻译 | ⌥T / Ctrl+T | 选区 | 选中文字后按下 |
+| 触发划词 | ⌥T / Ctrl+T | 选区 | 选中文字后按下 |
 
 - 一个快捷键只触发一个命令。把快捷键设给另一个命令时，原来的命令失去这个快捷键。
-- 首次设置快捷键时输入来源为语音，可改为选区；改键时保留原来的输入来源。
+- 内置命令的输入来源是固定的。没有声明 `input` 的命令，首次设置快捷键时输入来源为语音，可改为选区；改键时保留原来的输入来源。
 - 命令拿到的都是 `input.text`，不需要区分来源；同一个命令设成语音就处理说的话，设成选区就处理选中的文字。
 - 语音快捷键的触发方式（「通用 → 快捷键 → 触发方式」）：按住说话、松开结束，或按一下开始、再按一下结束。
   单修饰键快捷键按住期间按了其他键（如 ⌥+X）时视为普通组合键，不会触发。
@@ -125,6 +126,7 @@ export function action(event) { … }
 export function input(event) { … }
 export function translated(event) { … }
 export function inserted(event) { … }
+export function focus(event) { … }
 ```
 
 处理函数收到的事件对象中，公共字段与事件字段平铺在同一层：
@@ -215,6 +217,17 @@ export function inserted(event) { … }
 - `delivery` 为 `inserted`（已写入输入框）或 `copiedToClipboard`（没有可写入的位置，只放入剪贴板）。
 - `by` 为发出写入的扩展。写入者自己不会收到。
 
+### 3.6 `focus`：前台应用切换（hook，由 Sayso 广播）
+
+切换到其他应用时广播给订阅者，Sayso 启动时也发一次。扩展刚启用，或它的「按应用配置」表刚被修改时，Sayso 会用当前应用再单独发给它一次。
+
+```json
+"app": { "id": "com.apple.dt.Xcode", "name": "Xcode" }
+```
+
+- `app` 的 `id` 跨次运行稳定（macOS 为 Bundle ID，Windows 为进程名），可以作为记录 key。回到 Sayso 自身或没有前台应用时 `app` 为 `null`。
+- 同一应用内切换窗口不广播。事件没有候选框，处理时不能输出块。
+
 ## 4. `sayso` API
 
 Sayso 在每个扩展的上下文中注入全局对象 `sayso`。块、数据、朗读、广播是**指令**，调用即生效、没有返回值；
@@ -232,9 +245,10 @@ Sayso 在每个扩展的上下文中注入全局对象 `sayso`。块、数据、
 | `sayso.store.delete(collection, key)` | `store` | 删除一条记录 |
 | `await sayso.store.list(collection)` | `store` | 读取集合中的全部记录（含本次已执行的写入） |
 | `sayso.speak(text, language)` | — | 自动朗读；用户关闭了「自动朗读」时不发声 |
-| `await sayso.llm(system, user)` | `llm` | 用用户配置的模型与思考强度补全，返回模型输出的文本；用户填写了翻译背景时，core 会把它附在 `system` 之后。未配置模型或调用失败时抛出异常 |
+| `await sayso.llm(system, user)` | `llm` | 用用户配置的模型与思考强度补全，返回模型输出的文本；当前有背景（见 `sayso.context.set`）时，core 会把它附在 `system` 之后。未配置模型或调用失败时抛出异常 |
 | `await sayso.insert(text)` | `insert` | 写入触发命令时的前台应用，返回 `"inserted"` 或 `"copiedToClipboard"`；只能在处理 `command` 时使用 |
 | `sayso.publish({ type: "translated", output, pairs, context, card })` | `publish` | 处理 `command` 时广播 `translated` hook，见下文 |
+| `sayso.context.set(text)` | `context` | 替换提供给语音识别与翻译模型的背景，下一次录音与模型请求生效；超过 400 字时截断。只保存在内存中，多个扩展设置时以最后一次为准，声明了该能力的扩展被停用时清空 |
 | `sayso.text.mayContainNative(text)` | — | 文本是否可能夹杂本地语言；纯目标语言的文本可以跳过模型调用 |
 | `sayso.fs.readText(path)` / `writeText(path, text)` / `appendText(path, text)` / `exists(path)` / `mkdir(path)` | `fs` | 同步读写 UTF-8 文本文件；相对路径相对扩展目录，`~/` 展开为用户主目录；`mkdir` 会创建中间目录 |
 | `console.log(…)` 等 | — | 输出的末尾 4KB 显示在扩展管理页的「最近一次运行」中 |
@@ -322,6 +336,20 @@ sayso.publish({ type: "translated", output: "意外发现", pairs: [{ target: "s
 - `sort`：排序字段与方向（`asc` / `desc`）；数字按数值，其余按文本。
 - `itemActions`：每个条目上的操作，同样可用模板。条目上的 `invoke` 以 `origin: "tab"` 回调扩展，并附带该条记录。
 
+页签也可以不声明 `item`，改为声明 `appTable`（两者必须二选一），由 Sayso 渲染成可编辑的「按应用配置」表，打开和编辑时同样不运行扩展：
+
+```json
+"tab": {
+  "title": "应用背景",
+  "collection": "contexts",
+  "appTable": { "placeholder": "例如：我是软件工程师", "maxLength": 400 }
+}
+```
+
+- 顶部是固定的默认行；下方每行左边选一个正在运行的应用，右边填文本，末尾的加号添加新行。一个应用只能出现在一行。
+- 记录字段为 `appId`、`appName`、`text`，默认行的 `key` 为 `default`。扩展用 `sayso.store.list` 读取。
+- 表被修改后，Sayso 会向订阅了 `focus` 的本扩展发一次 `focus` 事件，让修改立即生效。
+
 ## 8. 候选框的组成与显示时长
 
 一次按快捷键对应一个候选框：
@@ -345,7 +373,7 @@ sayso.publish({ type: "translated", output: "意外发现", pairs: [{ target: "s
 
 ### 9.2 互译 `sayso.selection`
 
-- 提供命令 `translate`（「划词翻译」），默认快捷键为 ⌥T、输入为选区；能力为 `blocks`、`publish`、`llm`。
+- 提供命令 `translate`（「触发划词」），默认快捷键为 ⌥T、输入为选区；能力为 `blocks`、`publish`、`llm`。
 - 输入为本地语言则译为目标语言，其他语言译为本地语言；输出译文（`translation`）、原文（`original`）两个 `text` 块。
 - 涉及目标语言时朗读目标语言一侧。翻译完毕广播 `translated`（`output` 为译文，`context` 为 `null`，`card` 为 `translation`）；第三种语言（如目标语言为日语时选中英文）不朗读，词对为空。
 
@@ -356,6 +384,11 @@ sayso.publish({ type: "translated", output: "意外发现", pairs: [{ target: "s
 - 按钮是 `invoke` 操作，载荷中带上要加入的词条、本次全部词条与整句卡片引用，扩展本身不保存候选状态。点击后以 `sayso.store.patch` 写入（键为「语言|小写词条」），`increment: { count: 1 }`；有 `context` 时记录为例句，没有时不覆盖已有例句。
 - 记录中保存最近加入时的候选框 id，同一候选框中每个词条只计一次，因此先单独加入、再「全部加入」不会重复计数。
 - 已加入的词条把按钮换成不可点击的「已加入生词本（第 3 次）」；本次的词条都已加入后（无论逐个还是一次全部加入），整句卡片上的按钮换成不可点击的「已全部加入生词本」。
+
+### 9.4 应用背景 `sayso.context`
+
+- 事件式扩展：订阅 `focus`，能力为 `store`、`context`，拥有「应用背景」页签（集合 `contexts`，`appTable` 表）。
+- 切换应用时，用该应用这一行的文本作为背景；当前应用不在表中或这一行文本为空时，用默认行。
 
 ## 10. 本地语音服务
 

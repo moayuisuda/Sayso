@@ -10,7 +10,7 @@ import SaysoCore
 /// - 按住模式：快捷键按下即发 `.trigger`，松开发 `.stop`。单修饰键有短暂确认期，确认后才发 `.trigger`。
 /// - 按一下模式：组合键按下即发 `.toggle`；单修饰键轻点（很快松开）时发 `.toggle`。
 /// - 单修饰键按住期间按了其他键（如 ⌥+X，或 ⌥T 这类组合快捷键），视为在按组合键，本次不触发单修饰键。
-/// - 进行中按 Esc 取消。
+/// - 进行中按 Esc 取消；展示结果时按 Esc 关闭候选框。
 @MainActor
 final class HotkeyMonitor {
     enum Action {
@@ -101,6 +101,11 @@ final class HotkeyMonitor {
                     perform(.cancel)
                     return nil
                 }
+                // 关闭候选框时吞掉 Esc，避免同时触发前台应用的退出全屏、关闭弹窗等行为。
+                if !isRepeat, let surface = dismissibleSurface(for: event) {
+                    perform(.dismiss(surface))
+                    return nil
+                }
             }
             if swallowedKeys.contains(keyCode) { return nil }  // 组合快捷键的自动重复
             let combination = Hotkey(keyCode: keyCode, modifiers: event.flags.intersection(Hotkey.standardModifierMask).rawValue)
@@ -111,7 +116,7 @@ final class HotkeyMonitor {
             // 非激活面板收不到本地按键；全局监听只通知关闭，Enter 继续交给前台输入框。
             if !isRepeat, heldModifier == nil, (keyCode == UInt16(kVK_Return) || keyCode == UInt16(kVK_ANSI_KeypadEnter)),
                event.flags.intersection(Hotkey.standardModifierMask).isEmpty,
-               let surface = candidateSurface(TimeInterval(event.timestamp) / 1_000_000_000) {
+               let surface = dismissibleSurface(for: event) {
                 perform(.dismiss(surface))
             }
             if heldModifier != nil { interrupt() }
@@ -124,6 +129,11 @@ final class HotkeyMonitor {
             break
         }
         return Unmanaged.passUnretained(event)
+    }
+
+    /// CGEvent 时间戳为纳秒，候选框按秒比较，以排除它出现前产生的按键。
+    private func dismissibleSurface(for event: CGEvent) -> String? {
+        candidateSurface(TimeInterval(event.timestamp) / 1_000_000_000)
     }
 
     private func handleFlagsChanged(keyCode: UInt16, flags: CGEventFlags) {

@@ -28,6 +28,7 @@ final class CoreModel {
     @ObservationIgnored var onUpdateAvailable: (AppRelease) -> Void = { _ in }
 
     @ObservationIgnored private let logger = Logger(subsystem: "com.sayso.app", category: "core")
+    @ObservationIgnored private var focusObservation: NSKeyValueObservation?
 
     init(platform: MacPlatform) throws {
         try installLogSink(sink: UnifiedLogSink())
@@ -48,6 +49,10 @@ final class CoreModel {
         Localization.native = settings.nativeLanguage
         observer.model = self
         reloadExtensions()
+        // 启动时也上报一次，扩展据此给出当前应用的背景。
+        focusObservation = NSWorkspace.shared.observe(\.frontmostApplication, options: [.initial, .new]) { [core] _, _ in
+            core.appFocused(app: .frontmost())
+        }
     }
 
     // MARK: 设置
@@ -140,7 +145,7 @@ final class CoreModel {
     var enabledCommands: [EnabledCommand] {
         extensions.filter(\.enabled).flatMap { info in
             info.manifest.commands.map {
-                EnabledCommand(key: CommandKey(extensionId: info.manifest.id, commandId: $0.id), spec: $0, extensionName: info.manifest.name)
+                EnabledCommand(key: CommandKey(extensionId: info.manifest.id, commandId: $0.id), spec: $0)
             }
         }
     }
@@ -179,8 +184,11 @@ final class CoreModel {
     }
 
     fileprivate func reloadSettings() {
+        let previousLanguage = settings.nativeLanguage
         settings = core.settings()
         Localization.native = settings.nativeLanguage
+        // 扩展的文案随本地语言变化。
+        if settings.nativeLanguage != previousLanguage { reloadExtensions() }
     }
 
     fileprivate func reloadExtensions() {
@@ -202,7 +210,6 @@ final class CoreModel {
 struct EnabledCommand: Identifiable {
     let key: CommandKey
     let spec: CommandSpec
-    let extensionName: String
 
     var id: CommandKey { key }
 }

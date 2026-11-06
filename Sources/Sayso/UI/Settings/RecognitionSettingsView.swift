@@ -14,9 +14,9 @@ struct RecognitionSettingsView: View {
                 caption: selected?.caption
             ) {
                 Picker(L("识别服务", "Service"), selection: model.binding(\.asrSource)) {
-                    // 不能识别当前语言的来源不可选，需先在通用页改语言。
+                    // 不能识别当前语言的来源不可选，需先在通用页改语言。菜单式 Picker 会忽略选项上的 `disabled`，须用 `selectionDisabled`。
                     ForEach(sources, id: \.id) { source in
-                        Text(source.title).tag(source.id).disabled(!model.supportsLanguages(source))
+                        Text(source.title).tag(source.id).selectionDisabled(!model.supportsLanguages(source))
                     }
                     // 来源不可用时提示重新选择服务。
                     if selected == nil {

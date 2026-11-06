@@ -9,4 +9,11 @@ extension AppInfo {
         else { return nil }
         return AppInfo(id: app.bundleIdentifier, name: app.localizedName)
     }
+
+    /// 正在运行、出现在 Dock 中的应用，不含 Sayso 自身。
+    static func running() -> [AppInfo] {
+        NSWorkspace.shared.runningApplications
+            .filter { $0.activationPolicy == .regular && $0.bundleIdentifier != Bundle.main.bundleIdentifier }
+            .map { AppInfo(id: $0.bundleIdentifier, name: $0.localizedName) }
+    }
 }

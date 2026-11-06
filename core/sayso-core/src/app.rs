@@ -7,6 +7,7 @@ use std::sync::{Arc, Mutex, RwLock};
 
 use crate::asr::source::{self, AsrField, AsrFieldKind, AsrSource};
 use crate::asr::AudioFeed;
+use crate::app_table::{self, AppTable};
 use crate::error::CoreError;
 use crate::extensions::{permission_summary, ExtensionInfo, Extensions};
 use crate::l10n::{set_native_language, tr};
@@ -14,11 +15,14 @@ use crate::llm::Endpoint;
 use crate::package::{self, PackageContents};
 use crate::platform::{CoreObserver, Platform};
 use crate::plugin::CatalogProblem;
-use crate::protocol::{Block, BlockAction, InputSource, Manifest};
+use crate::protocol::{AppInfo, AppTableSpec, Block, BlockAction, Capability, InputSource, Manifest};
 use crate::session::{ActionContext, Session, SessionState};
 use crate::settings::{self, CommandKey, Hotkey, PlatformDefaults, SecretSlot, Secrets, Settings};
 use crate::store::{StoreWrite, Stores};
 use crate::update::{self, AppRelease};
+
+/// 提供给模型的背景的长度上限（字符），取各识别服务上下文限制中最小的千问 400 字。
+const CONTEXT_LIMIT: usize = 400;
 
 /// 数据目录布局，与此前版本一致：已安装扩展与扩展数据都在其中。
 struct Paths {
@@ -47,11 +51,23 @@ pub(crate) struct Inner {
     app_version: String,
     /// 已发现的比当前版本新的正式版。
     available_update: Mutex<Option<AppRelease>>,
+    /// 宿主上报的前台应用；外层 None 表示尚未上报过。
+    pub focused: Mutex<Option<Option<AppInfo>>>,
+    /// 扩展设置的背景，提供给语音识别与翻译模型。只在内存中，由扩展在运行时给出。
+    context: RwLock<String>,
 }
 
 impl Inner {
     pub fn settings(&self) -> Settings {
         self.settings.read().unwrap().clone()
+    }
+
+    pub fn context(&self) -> String {
+        self.context.read().unwrap().clone()
+    }
+
+    pub fn set_context(&self, text: &str) {
+        *self.context.write().unwrap() = text.chars().take(CONTEXT_LIMIT).collect();
     }
 
     pub fn secrets(&self) -> std::sync::RwLockReadGuard<'_, Secrets> {
@@ -169,6 +185,8 @@ impl Core {
             runtime: runtime.handle().clone(),
             app_version,
             available_update: Mutex::default(),
+            focused: Mutex::default(),
+            context: RwLock::default(),
         });
         Ok(Arc::new(Core { inner, _runtime: runtime }))
     }
@@ -199,6 +217,12 @@ impl Core {
         if let Some(feed) = self.inner.audio.lock().unwrap().as_ref() {
             feed.send(pcm);
         }
+    }
+
+    /// 前台应用切换。`app.id` 须跨次运行稳定；回到 Sayso 自身或没有前台应用时为 None。
+    /// 宿主启动时上报一次当前应用。
+    pub fn app_focused(&self, app: Option<AppInfo>) {
+        self.inner.app_focused(app);
     }
 
     /// 鼠标悬停在候选框上时不自动隐藏；离开后重新计时。
@@ -258,7 +282,8 @@ impl Core {
 
     /// 设置命令的快捷键（`None` 为移除），然后落盘并通知宿主。规则见 `Settings::set_shortcut`。
     pub fn set_shortcut(&self, command: CommandKey, key: Option<Hotkey>) -> Result<(), CoreError> {
-        self.inner.modify_settings(|settings| settings.set_shortcut(command, key))
+        let fixed = self.inner.extensions.read().unwrap().command_spec(&command).and_then(|spec| spec.input);
+        self.inner.modify_settings(|settings| settings.set_shortcut(command, key, fixed))
     }
 
     /// 修改命令快捷键的输入来源。
@@ -385,10 +410,15 @@ impl Core {
         self.inner.modify_settings(|settings| {
             settings.enabled_extensions.retain(|id| id != &extension_id);
             if enabled {
-                settings.enabled_extensions.push(extension_id);
+                settings.enabled_extensions.push(extension_id.clone());
             }
         })?;
         self.inner.observer.extensions_changed();
+        if enabled {
+            self.inner.refresh_focus(extension_id);
+        } else if self.grants(&extension_id, Capability::Context) {
+            self.inner.set_context("");
+        }
         Ok(())
     }
 
@@ -423,7 +453,42 @@ impl Core {
     pub fn delete_record(&self, extension_id: String, key: String) -> Result<(), CoreError> {
         let Some(collection) = self.tab_collection(&extension_id) else { return Ok(()) };
         self.inner.stores.apply(&extension_id, StoreWrite::Delete { collection, key })?;
-        self.inner.observer.store_changed(extension_id);
+        self.inner.observer.store_changed(extension_id.clone());
+        self.inner.refresh_focus(extension_id);
+        Ok(())
+    }
+
+    /// 「按应用配置」表的内容。
+    pub fn app_table(&self, extension_id: String) -> Result<AppTable, CoreError> {
+        let Some((collection, _)) = self.app_table_tab(&extension_id) else {
+            return Err(CoreError::InvalidInstruction(format!("{extension_id} has no app table")));
+        };
+        let records = self.inner.stores.records(&extension_id, &collection)?;
+        Ok(AppTable::new(records, self.inner.platform.running_apps()))
+    }
+
+    /// 在表末尾加一条空行。
+    pub fn add_app_row(&self, extension_id: String) -> Result<(), CoreError> {
+        for key in self.app_table(extension_id.clone())?.unsaved_rows() {
+            self.save_app_row(extension_id.clone(), key, None, String::new())?;
+        }
+        self.save_app_row(extension_id, uuid::Uuid::new_v4().to_string(), None, String::new())
+    }
+
+    /// 保存一行；默认行的 key 为 [`app_table::DEFAULT_ROW`]，不带应用。
+    pub fn save_app_row(
+        &self,
+        extension_id: String,
+        key: String,
+        app: Option<AppInfo>,
+        text: String,
+    ) -> Result<(), CoreError> {
+        let Some((collection, spec)) = self.app_table_tab(&extension_id) else { return Ok(()) };
+        let set = app_table::fields(app, &text, spec.max_length as usize);
+        let write = StoreWrite::Patch { collection, key, set, increment: HashMap::new() };
+        self.inner.stores.apply(&extension_id, write)?;
+        self.inner.observer.store_changed(extension_id.clone());
+        self.inner.refresh_focus(extension_id);
         Ok(())
     }
 
@@ -493,6 +558,16 @@ impl Core {
     fn asr_field(&self, source_id: &str, field_key: &str) -> Option<AsrField> {
         let source = source::find(source_id)?;
         source.fields.into_iter().find(|field| field.key == field_key)
+    }
+
+    fn grants(&self, extension_id: &str, capability: Capability) -> bool {
+        self.inner.extensions.read().unwrap().get(extension_id).is_some_and(|plugin| plugin.manifest.grants(capability))
+    }
+
+    fn app_table_tab(&self, extension_id: &str) -> Option<(String, AppTableSpec)> {
+        let extensions = self.inner.extensions.read().unwrap();
+        let tab = extensions.get(extension_id)?.manifest.tab.as_ref()?;
+        Some((tab.collection.clone(), tab.app_table.clone()?))
     }
 
     fn tab_collection(&self, extension_id: &str) -> Option<String> {

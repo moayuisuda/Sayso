@@ -61,8 +61,6 @@ pub struct PlatformDefaults {
 pub struct Settings {
     pub target_language: Language,
     pub native_language: Language,
-    /// 用户自述的身份或领域（如「我是软件工程师」），提供给识别与翻译模型以提升专业词汇的准确率。
-    pub user_context: String,
     pub hotkey_style: HotkeyStyle,
     /// 以快捷键为键：一个快捷键只触发一个命令；一个命令也只有一个快捷键，没有快捷键的命令不会被触发。
     #[serde(with = "shortcut_entries")]
@@ -81,12 +79,10 @@ pub struct Settings {
     pub enabled_extensions: Vec<String>,
 }
 
-/// 翻译背景的长度上限（字符），取各识别服务上下文限制中最小的千问 400 字。
-pub const USER_CONTEXT_LIMIT: usize = 400;
-
 pub const SPEECH_TRANSLATE_ID: &str = "sayso.dictation";
 pub const SELECTION_TRANSLATE_ID: &str = "sayso.selection";
 pub const WORDBOOK_ID: &str = "sayso.wordbook";
+pub const APP_CONTEXT_ID: &str = "sayso.context";
 
 impl Settings {
     pub fn defaults(platform: PlatformDefaults) -> Self {
@@ -96,7 +92,6 @@ impl Settings {
         Settings {
             target_language: Language::English,
             native_language: Language::Chinese,
-            user_context: String::new(),
             hotkey_style: HotkeyStyle::Hold,
             shortcuts: HashMap::from([
                 (
@@ -116,7 +111,12 @@ impl Settings {
             llm_base_url: llm.default_base_url().into(),
             llm_model: llm.default_model().into(),
             llm_reasoning: ReasoningLevel::ModelDefault,
-            enabled_extensions: vec![SPEECH_TRANSLATE_ID.into(), SELECTION_TRANSLATE_ID.into(), WORDBOOK_ID.into()],
+            enabled_extensions: vec![
+                SPEECH_TRANSLATE_ID.into(),
+                SELECTION_TRANSLATE_ID.into(),
+                WORDBOOK_ID.into(),
+                APP_CONTEXT_ID.into(),
+            ],
         }
     }
 
@@ -130,11 +130,11 @@ impl Settings {
     }
 
     /// 设置命令的快捷键，`None` 为移除。快捷键已属于其他命令时从那个命令上移走；
-    /// 改键时保留原输入来源，首次设置为语音。
-    pub fn set_shortcut(&mut self, command: CommandKey, key: Option<Hotkey>) {
+    /// 命令有固定的输入来源（`fixed`）时用它；否则改键时保留原输入来源，首次设置为语音。
+    pub fn set_shortcut(&mut self, command: CommandKey, key: Option<Hotkey>, fixed: Option<InputSource>) {
         let previous = self.shortcut_of(&command).and_then(|key| self.shortcuts.remove(&key));
         if let Some(key) = key {
-            let input = previous.map_or(InputSource::Speech, |shortcut| shortcut.input);
+            let input = fixed.or(previous.map(|shortcut| shortcut.input)).unwrap_or(InputSource::Speech);
             self.shortcuts.insert(key, Shortcut { command, input });
         }
     }
@@ -146,9 +146,8 @@ impl Settings {
         }
     }
 
-    /// 规整用户提交的设置：翻译背景截断到长度上限；切换翻译服务时载入该服务的默认地址与模型。
+    /// 规整用户提交的设置：切换翻译服务时载入该服务的默认地址与模型。
     pub fn normalized(mut self, previous: &Settings) -> Self {
-        self.user_context = self.user_context.chars().take(USER_CONTEXT_LIMIT).collect();
         if self.llm_provider != previous.llm_provider {
             self.llm_base_url = self.llm_provider.default_base_url().into();
             self.llm_model = self.llm_provider.default_model().into();
@@ -317,25 +316,29 @@ mod tests {
 
         // 改键：保留原输入来源，重复提交不变。
         let other = Hotkey { key_code: 89, modifiers: 0x80000 };
-        settings.set_shortcut(selection.clone(), Some(other));
+        settings.set_shortcut(selection.clone(), Some(other), None);
         assert_eq!(settings.shortcuts[&other].input, InputSource::Selection);
         let rekeyed = settings.clone();
-        settings.set_shortcut(selection.clone(), Some(other));
+        settings.set_shortcut(selection.clone(), Some(other), None);
         assert_eq!(settings, rekeyed);
 
         // 占用其他命令的快捷键：原命令失去快捷键。
         let speech_key = settings.shortcut_of(&speech).unwrap();
-        settings.set_shortcut(selection.clone(), Some(speech_key));
+        settings.set_shortcut(selection.clone(), Some(speech_key), None);
         assert_eq!(settings.shortcuts[&speech_key].command, selection);
         assert_eq!(settings.shortcut_of(&speech), None);
         assert_eq!(settings.shortcuts.len(), 1);
 
         // 首次设置为语音；移除后命令没有快捷键。
-        settings.set_shortcut(speech.clone(), Some(other));
+        settings.set_shortcut(speech.clone(), Some(other), None);
         assert_eq!(settings.shortcuts[&other].input, InputSource::Speech);
         settings.set_shortcut_input(&speech, InputSource::Selection);
         assert_eq!(settings.shortcuts[&other].input, InputSource::Selection);
-        settings.set_shortcut(speech.clone(), None);
+
+        // 命令有固定的输入来源时以它为准。
+        settings.set_shortcut(speech.clone(), Some(other), Some(InputSource::Speech));
+        assert_eq!(settings.shortcuts[&other].input, InputSource::Speech);
+        settings.set_shortcut(speech.clone(), None, None);
         assert_eq!(settings.shortcut_of(&speech), None);
         assert_eq!(settings.shortcuts.len(), 1);
     }

@@ -15,6 +15,7 @@ public partial class App : Application
     private WindowsPlatform? platform;
     private HotkeyMonitor? hotkeys;
     private TrayIcon? tray;
+    private FocusMonitor? focus;
     private SettingsWindow? settings;
     private CandidateWindow? candidate;
     internal static readonly string DataDirectory = Environment.GetCommandLineArgs().Contains("--smoke-test")
@@ -54,6 +55,7 @@ public partial class App : Application
             settings.Hotkeys = hotkeys;
             platform.Changed += OnChanged;
             await settings.Initialize();
+            focus = new FocusMonitor(app => settings.Run(() => core.Call("appFocused", app)));
             tray = new TrayIcon(WinRT.Interop.WindowNative.GetWindowHandle(settings), settings.Show, () => Quit(), settings.L,
                 () => settings.Update?["version"]!.GetValue<string>(), settings.OpenUpdate);
             instance.Listen(Microsoft.UI.Dispatching.DispatcherQueue.GetForCurrentThread(), path =>
@@ -110,6 +112,7 @@ public partial class App : Application
         quitting = true;
         tray?.Dispose();
         hotkeys?.Dispose();
+        focus?.Dispose();
         if (core is not null) await core.Call("cancel");
         if (platform is not null) await Task.Run(platform.Stop);
         // 核心任务停止并释放回调后，再释放平台资源。

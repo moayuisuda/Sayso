@@ -35,6 +35,9 @@ internal sealed class WindowsPlatform(DispatcherQueue dispatcher) : IDisposable
                 NativeMethods.GetWindowThreadProcessId(window, out var process);
                 if (process == Environment.ProcessId || window == 0) return null;
                 return new JsonObject { ["id"] = window.ToInt64().ToString(), ["name"] = Process.GetProcessById((int)process).ProcessName };
+            case "runningApps":
+                var running = Process.GetProcesses().Where(p => p.Id != Environment.ProcessId && p.MainWindowHandle != 0).Select(p => p.ProcessName).Distinct();
+                return new JsonArray(running.Select(name => (JsonNode)App(name)).ToArray());
             case "copyText": return OnUI(async () => { await ClipboardService.Copy(args!.GetValue<string>()); return null; }).GetAwaiter().GetResult();
             case "openUrl": Open(args!.GetValue<string>()); return null;
             case "speak":
@@ -87,6 +90,17 @@ internal sealed class WindowsPlatform(DispatcherQueue dispatcher) : IDisposable
             cancellation.Dispose();
         }
     }
+
+    /// <summary>窗口所属的应用；Sayso 自身或进程已退出时为 null。窗口句柄每次运行都变，这里用进程名作跨次运行稳定的标识。</summary>
+    internal static JsonObject? AppOf(nint window)
+    {
+        NativeMethods.GetWindowThreadProcessId(window, out var process);
+        if (window == 0 || process == Environment.ProcessId) return null;
+        try { return App(Process.GetProcessById((int)process).ProcessName); }
+        catch (ArgumentException) { return null; }
+    }
+
+    private static JsonObject App(string name) => new() { ["id"] = name, ["name"] = name };
 
     public static void Open(string path) => Process.Start(new ProcessStartInfo(path) { UseShellExecute = true });
 

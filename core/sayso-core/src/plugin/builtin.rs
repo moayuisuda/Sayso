@@ -25,6 +25,11 @@ pub fn built_in_plugins() -> Vec<Plugin> {
             include_str!("../../../plugins/wordbook/main.js"),
             &[][..],
         ),
+        (
+            include_str!("../../../plugins/context/extension.json"),
+            include_str!("../../../plugins/context/main.js"),
+            &[][..],
+        ),
     ];
     plugins
         .iter()

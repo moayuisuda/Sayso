@@ -108,11 +108,15 @@ impl Extensions {
         })
     }
 
+    pub fn command_spec(&self, command: &CommandKey) -> Option<&CommandSpec> {
+        self.get(&command.extension_id)?.manifest.commands.iter().find(|spec| spec.id == command.command_id)
+    }
+
     /// 快捷键触发的命令及其名称；命令所属扩展未启用时为空。
     pub fn command_for<'a>(&self, settings: &'a Settings, key: Hotkey) -> Option<(&'a Shortcut, String)> {
         let shortcut = settings.shortcuts.get(&key)?;
         let (_, spec) = self.enabled_commands(settings).find(|(command, _)| *command == shortcut.command)?;
-        Some((shortcut, spec.title.clone()))
+        Some((shortcut, spec.localized_title()))
     }
 
     /// 已启用、订阅了该事件且在投递范围内的扩展。
@@ -130,7 +134,7 @@ impl Extensions {
     pub fn infos(&self, settings: &Settings) -> Vec<ExtensionInfo> {
         self.all()
             .map(|plugin| ExtensionInfo {
-                manifest: plugin.manifest.clone(),
+                manifest: plugin.manifest.localized(),
                 built_in: plugin.manifest.is_built_in(),
                 enabled: settings.enabled_extensions.iter().any(|id| id == plugin.id()),
                 last_result: self.last_results.get(plugin.id()).cloned(),
@@ -197,12 +201,12 @@ fn peer_link(event: EventType, prefix: String, extensions: Vec<String>) -> Optio
 }
 
 /// 让扩展的运行引出这个 hook 的能力：`translated` 由 `publish` 广播，`inserted` 在 `insert` 写入后由 Sayso 广播；
-/// `input`、`action` 不由扩展引出。
+/// `input`、`action`、`focus` 不由扩展引出。
 fn broadcaster_of(event: EventType) -> Option<Capability> {
     match event {
         EventType::Translated => Some(Capability::Publish),
         EventType::Inserted => Some(Capability::Insert),
-        EventType::Command | EventType::Action | EventType::Input => None,
+        EventType::Command | EventType::Action | EventType::Input | EventType::Focus => None,
     }
 }
 
@@ -213,6 +217,7 @@ fn hook_description(event: EventType) -> String {
         EventType::Input => tr("快捷键触发后，Sayso 准备好输入时", "When Sayso has the input ready after a shortcut"),
         EventType::Translated => tr("翻译完毕时", "When a translation is done"),
         EventType::Inserted => tr("文字写入当前应用后", "After text is typed into the current app"),
+        EventType::Focus => tr("切换到其他应用时", "When you switch to another app"),
     }
 }
 
@@ -229,6 +234,10 @@ pub fn capability_description(capability: Capability) -> String {
         Capability::Llm => tr("使用你配置的翻译模型", "Use the translation model you configured"),
         Capability::Publish => tr("向其他扩展广播事件", "Broadcast events to other extensions"),
         Capability::Fs => tr("读写你电脑上的文件", "Read and write files on your computer"),
+        Capability::Context => tr(
+            "设置提供给语音识别与翻译模型的背景",
+            "Set the background given to the speech and translation models",
+        ),
     }
 }
 

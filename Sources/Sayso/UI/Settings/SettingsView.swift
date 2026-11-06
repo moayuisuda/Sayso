@@ -46,8 +46,14 @@ struct SettingsView: View {
             ExtensionsSettingsView(model: model, packages: app.packages)
         case .extension(let id):
             if let manifest = model.tabExtensions.first(where: { $0.manifest.id == id })?.manifest, let tab = manifest.tab {
-                ExtensionTabView(model: model, manifest: manifest, tab: tab)
-                    .id(id)
+                Group {
+                    if let spec = tab.appTable {
+                        AppTableView(model: model, manifest: manifest, spec: spec)
+                    } else {
+                        ExtensionTabView(model: model, manifest: manifest, tab: tab)
+                    }
+                }
+                .id(id)
             }
         }
     }

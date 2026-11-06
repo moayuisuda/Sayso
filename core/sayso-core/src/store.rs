@@ -237,9 +237,10 @@ mod tests {
             title: "生词本".into(),
             icon: None,
             collection: "words".into(),
-            item: Json(
+            item: Some(Json(
                 json!({"type": "term", "term": "{{term}}", "gloss": "{{gloss}}", "detail": "{{example}}", "language": "{{language}}"}),
-            ),
+            )),
+            app_table: None,
             search_fields: vec!["term".into(), "gloss".into()],
             sort: Some(TabSort { field: "term".into(), order: SortOrder::Desc }),
             item_actions: vec![Json(json!({"type": "delete"}))],

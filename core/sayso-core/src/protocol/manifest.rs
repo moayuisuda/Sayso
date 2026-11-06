@@ -2,8 +2,9 @@ use std::time::Duration;
 
 use serde::{Deserialize, Serialize};
 
-use super::{json, Block, Capability, EventType, Json, BUILT_IN_PREFIX, SCHEMA_VERSION};
+use super::{json, Block, Capability, EventType, InputSource, Json, BUILT_IN_PREFIX, SCHEMA_VERSION};
 use crate::error::CoreError;
+use crate::l10n::tr;
 use crate::store::{is_valid_collection_name, StoreRecord};
 
 /// 扩展清单 `extension.json`。内置扩展的清单随 core 编译嵌入，格式相同。
@@ -30,11 +31,17 @@ pub struct Manifest {
     pub commands: Vec<CommandSpec>,
 }
 
-/// 扩展命令。输入来源由用户为快捷键设置，命令本身只接收统一的 `input.text`。
+/// 扩展命令。命令本身只接收统一的 `input.text`；没有声明 `input` 时，输入来源由用户为快捷键设置。
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize, uniffi::Record)]
 pub struct CommandSpec {
     pub id: String,
     pub title: String,
+    /// 界面语言不是中文时显示的名称；没有时都显示 `title`。
+    #[serde(default, rename = "titleEn")]
+    pub title_en: Option<String>,
+    /// 命令固定的输入来源，界面不再提供选择。
+    #[serde(default)]
+    pub input: Option<InputSource>,
 }
 
 /// 扩展页签：按模板渲染扩展的某个数据集合。
@@ -46,8 +53,12 @@ pub struct TabSpec {
     #[serde(default)]
     pub icon: Option<String>,
     pub collection: String,
-    /// 条目的块模板（不含 id，id 取记录的 key），字符串中可用 `{{字段名}}`。
-    pub item: Json,
+    /// 条目的块模板（不含 id，id 取记录的 key），字符串中可用 `{{字段名}}`。与 `app_table` 二选一。
+    #[serde(default)]
+    pub item: Option<Json>,
+    /// 把集合渲染成可编辑的「按应用配置」表。与 `item` 二选一。
+    #[serde(default)]
+    pub app_table: Option<AppTableSpec>,
     #[serde(default)]
     pub search_fields: Vec<String>,
     #[serde(default)]
@@ -55,6 +66,17 @@ pub struct TabSpec {
     /// 条目上的操作模板。
     #[serde(default)]
     pub item_actions: Vec<Json>,
+}
+
+/// 「按应用配置」表：一行固定的默认行，其余每行为「应用 + 文本」，由 Sayso 渲染与保存。
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize, uniffi::Record)]
+#[serde(rename_all = "camelCase")]
+pub struct AppTableSpec {
+    /// 文本框为空时的提示。
+    #[serde(default)]
+    pub placeholder: Option<String>,
+    /// 每行文本的长度上限（字符）。
+    pub max_length: u32,
 }
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize, uniffi::Record)]
@@ -70,7 +92,23 @@ pub enum SortOrder {
     Desc,
 }
 
+impl CommandSpec {
+    /// 当前界面语言下的名称。
+    pub fn localized_title(&self) -> String {
+        self.title_en.as_ref().map_or_else(|| self.title.clone(), |english| tr(&self.title, english))
+    }
+}
+
 impl Manifest {
+    /// 交给界面的清单：命令名已换成当前界面语言。
+    pub fn localized(&self) -> Self {
+        let mut manifest = self.clone();
+        for command in &mut manifest.commands {
+            command.title = command.localized_title();
+        }
+        manifest
+    }
+
     pub fn is_built_in(&self) -> bool {
         self.id.starts_with(BUILT_IN_PREFIX)
     }
@@ -118,6 +156,9 @@ impl Manifest {
             if !is_valid_collection_name(&tab.collection) {
                 return fail(format!("invalid collection name {}", tab.collection));
             }
+            if tab.item.is_some() == tab.app_table.is_some() {
+                return fail("tab requires exactly one of item and appTable".into());
+            }
         }
         Ok(())
     }
@@ -126,8 +167,11 @@ impl Manifest {
 impl TabSpec {
     /// 用一条记录渲染页签条目。
     pub fn render(&self, record: &StoreRecord) -> Result<Block, CoreError> {
+        let Some(item) = &self.item else {
+            return Err(CoreError::InvalidManifest("tab.item is required to render items".into()));
+        };
         let resolve = |name: &str| record.value(name).map(|value| json::text_value(&value)).unwrap_or_default();
-        let serde_json::Value::Object(mut fields) = json::substitute_placeholders(&self.item.0, &resolve) else {
+        let serde_json::Value::Object(mut fields) = json::substitute_placeholders(&item.0, &resolve) else {
             return Err(CoreError::InvalidManifest("tab.item must be an object".into()));
         };
         fields.insert("id".into(), record.key.clone().into());

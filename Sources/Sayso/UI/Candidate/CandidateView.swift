@@ -21,12 +21,11 @@ struct CandidateView: View {
                 .strokeBorder(Theme.panelStroke)
         )
         .overlay {
-            if isRecording {
-                FlowingBorder(level: model.audioLevel, cornerRadius: Theme.Radius.panel)
-                    .transition(.opacity)
-            }
+            // 只动画透明度：窗口尺寸随内容立即变化，布局一旦参与动画，卡片会在已变大的窗口和阴影里慢慢伸缩，形成重影。
+            // 流光常驻而不增删，否则淡出时停在旧尺寸，面板变高后会在卡片中间留下一条边线。
+            FlowingBorder(level: model.audioLevel, cornerRadius: Theme.Radius.panel, isActive: isRecording)
+                .animation(.easeOut(duration: 0.25)) { $0.opacity(isRecording ? 1 : 0) }
         }
-        .animation(.easeOut(duration: 0.25), value: isRecording)
         .fixedSize(horizontal: false, vertical: true)
         .tint(Theme.accent)
         .onHover { model.core.setHovering(hovering: $0) }

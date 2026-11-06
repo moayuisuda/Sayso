@@ -14,7 +14,7 @@ use sayso_core::protocol::{
 };
 use sayso_core::session::{SessionState, SurfaceView};
 use sayso_core::settings::{CommandKey, Hotkey, PlatformDefaults, SecretSlot};
-use sayso_core::{AppRelease, Core, CoreObserver, Platform, PlatformError};
+use sayso_core::{AppRelease, Core, CoreObserver, Platform, PlatformError, DEFAULT_ROW};
 
 const SPEECH: Hotkey = Hotkey { key_code: 61, modifiers: 0 };
 const SELECTION: Hotkey = Hotkey { key_code: 17, modifiers: 0x80000 };
@@ -68,6 +68,9 @@ impl Platform for FakePlatform {
     fn frontmost_app(&self) -> Option<AppInfo> {
         Some(AppInfo { id: Some("com.example.notes".into()), name: Some("Notes".into()) })
     }
+    fn running_apps(&self) -> Vec<AppInfo> {
+        vec![]
+    }
     fn speak(&self, text: String, language: Language, _rate: f32) -> Result<(), PlatformError> {
         self.spoken.lock().unwrap().push((text, language));
         match self.speech_error.lock().unwrap().clone() {
@@ -83,13 +86,16 @@ impl Platform for FakePlatform {
 #[derive(Default)]
 struct RecordingObserver {
     states: Mutex<Vec<SessionState>>,
+    extension_updates: AtomicUsize,
 }
 
 impl CoreObserver for RecordingObserver {
     fn session_changed(&self, state: SessionState) {
         self.states.lock().unwrap().push(state);
     }
-    fn extensions_changed(&self) {}
+    fn extensions_changed(&self) {
+        self.extension_updates.fetch_add(1, Ordering::SeqCst);
+    }
     fn store_changed(&self, _extension_id: String) {}
     fn settings_changed(&self) {}
     fn update_available(&self, _release: AppRelease) {}
@@ -100,6 +106,8 @@ struct LocalAsr {
     address: SocketAddr,
     stopping: Arc<AtomicBool>,
     requests: Arc<AtomicUsize>,
+    /// 每次识别请求的完整表单。
+    forms: Arc<Mutex<Vec<String>>>,
     worker: Option<std::thread::JoinHandle<()>>,
 }
 
@@ -109,9 +117,11 @@ impl LocalAsr {
         let address = listener.local_addr().unwrap();
         let stopping = Arc::new(AtomicBool::new(false));
         let requests = Arc::new(AtomicUsize::new(0));
+        let forms = Arc::new(Mutex::new(Vec::new()));
         let worker = {
             let stopping = stopping.clone();
             let requests = requests.clone();
+            let forms = forms.clone();
             std::thread::spawn(move || {
                 for stream in listener.incoming() {
                     let mut stream = stream.unwrap();
@@ -150,13 +160,14 @@ impl LocalAsr {
                     assert!(body.windows(8).any(|part| part == b"WAVEfmt "));
                     let multipart = String::from_utf8_lossy(body);
                     assert!(multipart.contains("name=\"model\"\r\n\r\nlocal-test"));
+                    forms.lock().unwrap().push(multipart.into_owned());
                     requests.fetch_add(1, Ordering::SeqCst);
                     let response = r#"{"text":"I have a 苹果."}"#;
                     write!(stream, "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{}", response.len(), response).unwrap();
                 }
             })
         };
-        Self { address, stopping, requests, worker: Some(worker) }
+        Self { address, stopping, requests, forms, worker: Some(worker) }
     }
 }
 
@@ -264,6 +275,72 @@ fn status_message(surface: &SurfaceView, source: &str) -> String {
     message.clone()
 }
 
+/// 上报前台应用，等扩展处理完。
+fn focus(core: &Core, observer: &RecordingObserver, app: Option<AppInfo>) {
+    let before = observer.extension_updates.load(Ordering::SeqCst);
+    core.app_focused(app);
+    let deadline = Instant::now() + Duration::from_secs(10);
+    while observer.extension_updates.load(Ordering::SeqCst) == before {
+        assert!(Instant::now() < deadline, "focus event was not handled");
+        std::thread::sleep(Duration::from_millis(10));
+    }
+}
+
+/// 说一句话，返回发给识别服务的表单。
+fn dictate(core: &Core, server: &LocalAsr) -> String {
+    core.trigger(SPEECH);
+    core.push_audio(vec![0; 16000]);
+    core.stop();
+    wait_for_surface(core, |surface| !block_ids(surface, "sayso.dictation").is_empty());
+    server.forms.lock().unwrap().last().expect("speech service was called").clone()
+}
+
+/// 背景按前台应用切换：有对应行时用该行，切到其他应用时回到默认行，改表后立即生效。
+#[test]
+fn speech_recognition_uses_the_context_of_the_focused_app() {
+    let (_data, core, _platform, observer, server) = fixture(Some(""));
+    let xcode = AppInfo { id: Some("com.apple.dt.Xcode".into()), name: Some("Xcode".into()) };
+    let notes = AppInfo { id: Some("com.apple.Notes".into()), name: Some("Notes".into()) };
+    let save = |key: &str, app: Option<AppInfo>, text: &str| {
+        core.save_app_row("sayso.context".into(), key.into(), app, text.into()).unwrap();
+    };
+    save(DEFAULT_ROW, None, "default background");
+    save("xcode", Some(xcode.clone()), "swift background");
+
+    focus(&core, &observer, Some(xcode));
+    assert!(dictate(&core, &server).contains("swift background"));
+
+    focus(&core, &observer, Some(notes));
+    assert!(dictate(&core, &server).contains("default background"));
+
+    let before = observer.extension_updates.load(Ordering::SeqCst);
+    save(DEFAULT_ROW, None, "edited background");
+    while observer.extension_updates.load(Ordering::SeqCst) == before {
+        std::thread::sleep(Duration::from_millis(10));
+    }
+    assert!(dictate(&core, &server).contains("edited background"));
+}
+
+/// 空表显示一条未保存的空行；点加号时它要留下，新行排在后面，删光后又回到一条空行。
+#[test]
+fn app_table_keeps_the_blank_row_when_adding_and_returns_to_it_when_emptied() {
+    let (_data, core, _platform, _observer, _server) = fixture(Some(""));
+    let extension = || "sayso.context".to_string();
+    let keys = || core.app_table(extension()).unwrap().rows.into_iter().map(|row| row.key).collect::<Vec<_>>();
+    let blank = keys();
+    assert_eq!(blank.len(), 1);
+
+    core.add_app_row(extension()).unwrap();
+    let rows = keys();
+    assert_eq!(rows.len(), 2);
+    assert_eq!(rows[0], blank[0]);
+
+    for key in rows {
+        core.delete_record(extension(), key).unwrap();
+    }
+    assert_eq!(keys(), blank);
+}
+
 /// 语音快捷键：录音 → 本地 HTTP 服务 → 混说翻译。没有配置翻译模型时原样写入触发时的前台应用，并提示原因。
 #[test]
 fn speech_flow_inserts_transcript_into_the_triggering_app() {
@@ -273,7 +350,7 @@ fn speech_flow_inserts_transcript_into_the_triggering_app() {
     assert_eq!(
         core.session_state(),
         SessionState::Recording {
-            partial: String::new(), command: "语音输入 / Voice input".into(), shortcut: SPEECH
+            partial: String::new(), command: "语音输入".into(), shortcut: SPEECH
         }
     );
     core.push_audio(vec![0; 16000]);
@@ -357,7 +434,7 @@ fn toggling_a_speech_shortcut_stops_the_recording() {
     core.set_shortcut_input(translate("sayso.selection"), InputSource::Speech).unwrap();
     core.toggle(SPEECH);
     assert!(matches!(core.session_state(), SessionState::Recording { command, .. }
-        if command == "语音输入 / Voice input"));
+        if command == "语音输入"));
     core.push_audio(vec![0; 16000]);
     core.toggle(SELECTION);
 

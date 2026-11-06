@@ -36,14 +36,14 @@ extension Hotkey {
 
     private static func modifierKeyName(_ keyCode: UInt16) -> String {
         switch Int(keyCode) {
-        case kVK_RightOption: return L("右 ⌥ Option", "Right ⌥ Option")
-        case kVK_Option: return L("左 ⌥ Option", "Left ⌥ Option")
-        case kVK_RightCommand: return L("右 ⌘ Command", "Right ⌘ Command")
-        case kVK_Command: return L("左 ⌘ Command", "Left ⌘ Command")
-        case kVK_RightShift: return L("右 ⇧ Shift", "Right ⇧ Shift")
-        case kVK_Shift: return L("左 ⇧ Shift", "Left ⇧ Shift")
-        case kVK_RightControl: return L("右 ⌃ Control", "Right ⌃ Control")
-        case kVK_Control: return L("左 ⌃ Control", "Left ⌃ Control")
+        case kVK_RightOption: return L("右 ⌥", "Right ⌥")
+        case kVK_Option: return L("左 ⌥", "Left ⌥")
+        case kVK_RightCommand: return L("右 ⌘", "Right ⌘")
+        case kVK_Command: return L("左 ⌘", "Left ⌘")
+        case kVK_RightShift: return L("右 ⇧", "Right ⇧")
+        case kVK_Shift: return L("左 ⇧", "Left ⇧")
+        case kVK_RightControl: return L("右 ⌃", "Right ⌃")
+        case kVK_Control: return L("左 ⌃", "Left ⌃")
         default: return "fn"
         }
     }

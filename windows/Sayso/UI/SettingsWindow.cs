@@ -215,6 +215,7 @@ internal sealed partial class SettingsWindow : Window
             "general" => GeneralPage(),
             "models" => await ModelsPage(),
             "extensions" => await ExtensionsPage(),
+            _ when AppTableSpec(id) is { } spec => await AppTablePage(id, spec),
             _ => await ExtensionPage(id, "")
         };
         // 页面读取密钥等数据时允许切换页签，旧请求完成后不得覆盖当前页面。

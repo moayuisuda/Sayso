@@ -17,7 +17,7 @@ core/                     Rust core（macOS 与 Windows 共用）
 │   ├── settings.rs         设置（settings.json）与密钥（config.json）
 │   ├── package.rs          `.sayso` 扩展包
 │   └── platform.rs         平台适配层接口：录音、选区、写入、朗读与状态推送
-├── plugins/              内置扩展「混说翻译」「互译」「生词本」（JS，编译时嵌入）
+├── plugins/              内置扩展「混说翻译」「互译」「生词本」「应用背景」（JS，编译时嵌入）
 └── sayso-windows-bridge/  Windows 的 C ABI：请求、状态回调与可取消的平台异步调用
 Sources/
 ├── SaysoCore/            UniFFI 生成的 Swift 绑定（构建产物）

@@ -100,6 +100,9 @@ impl Platform for Host {
     fn frontmost_app(&self) -> Option<AppInfo> {
         self.call("frontmostApp", Value::Null).ok().and_then(|v| serde_json::from_value(v).ok())
     }
+    fn running_apps(&self) -> Vec<AppInfo> {
+        self.call("runningApps", Value::Null).ok().and_then(|v| serde_json::from_value(v).ok()).unwrap_or_default()
+    }
     fn speak(&self, text: String, language: Language, rate: f32) -> Result<(), PlatformError> {
         self.call("speak", json!({"text":text,"language":language.speech_locale(),"rate":rate}))
             .map(|_| ())
@@ -223,6 +226,10 @@ impl Bridge {
                 Ok(json!({"total":tab.total,"items":tab.items.into_iter().map(|i|json!({"key":i.key,"block":i.block})).collect::<Vec<_>>()})) }
             "tabAction" => { core.perform_tab_action(text(&args,"id")?,text(&args,"key")?,decode(args["action"].clone())?); Ok(Value::Null) }
             "candidateAction" => { core.perform_candidate_action(text(&args,"surface")?,text(&args,"source")?,text(&args,"block")?,decode(args["action"].clone())?); Ok(Value::Null) }
+            "appFocused" => { core.app_focused(decode(args)?); Ok(Value::Null) }
+            "appTable" => core.app_table(decode(args)?).map(|table| json!(table)).map_err(|e|e.to_string()),
+            "addAppRow" => { core.add_app_row(decode(args)?).map_err(|e|e.to_string())?; Ok(Value::Null) }
+            "saveAppRow" => { core.save_app_row(text(&args,"id")?,text(&args,"key")?,decode(args["app"].clone())?,text(&args,"text")?).map_err(|e|e.to_string())?; Ok(Value::Null) }
             "deleteRecord" => { core.delete_record(text(&args,"id")?,text(&args,"key")?).map_err(|e|e.to_string())?; Ok(Value::Null) }
             "openPackage" => { let info=self.runtime.block_on(core.open_package(decode(args)?)).map_err(|e|e.to_string())?;
                 Ok(json!({"token":info.token,"manifest":info.manifest,"bytes":info.byte_size,"replacing":info.replacing,"permissions":info.permission_summary})) }

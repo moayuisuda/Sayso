@@ -21,6 +21,10 @@ struct ReplayHost {
 
 #[async_trait]
 impl Host for ReplayHost {
+    fn shell_lifetime(&self) -> Option<tokio::sync::watch::Receiver<()>> {
+        None
+    }
+
     fn apply(&self, instruction: Instruction) -> Result<(), CoreError> {
         // 记录正式插件的指令；回放不访问 UI、播放设备或用户的生词本。
         self.instructions.lock().unwrap().push(instruction);

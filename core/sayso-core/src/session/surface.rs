@@ -82,6 +82,8 @@ pub(crate) struct Surface {
     translation_cards: Vec<String>,
     /// 仍在处理本次事件的扩展。
     running: HashSet<String>,
+    /// 发送端只由本候选框持有，关闭或替换候选框后，shell 的接收端立即得到关闭通知。
+    shell_lifetime: tokio::sync::watch::Sender<()>,
     /// 最近一次内容变化的时间，用于决定何时自动隐藏。
     last_change: Instant,
     /// 本次流程的基础停留时长。
@@ -96,9 +98,14 @@ impl Surface {
             sections: Vec::new(),
             translation_cards: Vec::new(),
             running: HashSet::new(),
+            shell_lifetime: tokio::sync::watch::channel(()).0,
             last_change: Instant::now(),
             hold,
         }
+    }
+
+    pub fn shell_lifetime(&self) -> tokio::sync::watch::Receiver<()> {
+        self.shell_lifetime.subscribe()
     }
 
     /// 失败提示；`input` 为失败前已得到的输入文字（如识别中断前的实时文字），保留给用户复制。

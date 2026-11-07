@@ -1,4 +1,5 @@
 //! 输入会话的端到端行为：用测试平台与本地 HTTP 识别服务驱动 `Core`，断言快捷键触发、写入与候选框内容。
+mod common;
 
 use std::io::{Read, Write};
 use std::net::{SocketAddr, TcpListener, TcpStream};
@@ -424,6 +425,66 @@ fn panel_dismissal_ignores_stale_ids_and_never_cancels_recording_or_processing()
     processing.dismiss_surface(second.id);
     assert!(matches!(processing.session_state(), SessionState::Processing { .. }));
     processing.cancel();
+}
+
+/// 关闭或替换候选框应取消对应的 shell，而不是让脚本继续执行到事件超时。
+#[test]
+fn closing_or_replacing_a_surface_stops_its_shell() {
+    common::install_shell_executable();
+    for replace in [false, true] {
+        let (data, core, _, _, _server) = fixture(Some("hello"));
+        let directory = data.path().join("Extensions/shell");
+        std::fs::create_dir_all(&directory).unwrap();
+        std::fs::write(
+            directory.join("extension.json"),
+            r#"{
+            "schemaVersion":4,"id":"test.shell","name":"Shell","main":"main.js",
+            "events":["command"],"capabilities":["shell"],"timeoutSeconds":10,
+            "commands":[{"id":"run","title":"Run","input":"selection"}]
+        }"#,
+        )
+        .unwrap();
+        std::fs::write(
+            directory.join("main.js"),
+            r#"
+            export async function command() {
+              await sayso.shell.run("echo started > started.txt; sleep 10; echo late > late.txt");
+            }
+        "#,
+        )
+        .unwrap();
+        core.reload_extensions();
+        core.set_enabled("test.shell".into(), true).unwrap();
+        let key = Hotkey { key_code: 70, modifiers: 1 };
+        core.set_shortcut(CommandKey { extension_id: "test.shell".into(), command_id: "run".into() }, Some(key))
+            .unwrap();
+        core.trigger(key);
+        let surface = wait_for_surface(&core, |surface| surface.working && directory.join("started.txt").exists());
+        if replace {
+            core.trigger(SELECTION);
+        } else {
+            core.dismiss_surface(surface.id);
+        }
+        let deadline = Instant::now() + Duration::from_secs(2);
+        loop {
+            let result = core
+                .extensions()
+                .into_iter()
+                .find(|extension| extension.manifest.id == "test.shell")
+                .unwrap()
+                .last_result;
+            if let Some(result) = result {
+                assert!(
+                    matches!(result.status, sayso_core::plugin::RunStatus::Failed { ref message } if message.contains("cancelled")),
+                    "{result:?}"
+                );
+                break;
+            }
+            assert!(Instant::now() < deadline, "closing the surface did not stop its shell");
+            std::thread::sleep(Duration::from_millis(10));
+        }
+        assert!(!directory.join("late.txt").exists());
+    }
 }
 
 /// 按一下模式：录音中再按语音快捷键结束录音，本次仍交给开始录音的命令。

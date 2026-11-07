@@ -8,7 +8,7 @@ if (Test-Path "$env:USERPROFILE/.dotnet/sdk") { $dotnet = "$env:USERPROFILE/.dot
 elseif (-not $dotnet) { throw '请安装 .NET 10 SDK。' }
 Push-Location $repo
 try {
-    & cargo build --manifest-path core/Cargo.toml -p sayso-windows-bridge --release --locked
+    & cargo build --manifest-path core/Cargo.toml -p sayso-windows-bridge -p sayso-shell --release --locked
     if ($LASTEXITCODE) { throw 'Rust core 构建失败。' }
     # @() 保证始终是数组：单元素数组从 if 表达式返回时会被展开成字符串，展开后按字符传参。
     $versionArgs = @(if ($Version) { "-p:Version=$Version" })

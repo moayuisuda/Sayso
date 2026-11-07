@@ -27,6 +27,7 @@ BIN="$(swift build -c release --package-path "$PROJECT_DIR" --show-bin-path)/Say
 rm -rf "$APP"
 mkdir -p "$APP/Contents/MacOS" "$APP/Contents/Resources"
 cp "$BIN" "$APP/Contents/MacOS/Sayso"
+cp "$PROJECT_DIR/core/target/release/sayso-shell" "$APP/Contents/MacOS/sayso-shell"
 cp "$PROJECT_DIR/Resources/Info.plist" "$APP/Contents/Info.plist"
 if [ -n "${VERSION:-}" ]; then
     /usr/libexec/PlistBuddy \
@@ -41,11 +42,13 @@ cp "$PROJECT_DIR/Resources/MenuBarIcon.png" "$APP/Contents/Resources/MenuBarIcon
 SIGN_FLAGS=(--force --options runtime --entitlements "$PROJECT_DIR/Resources/Sayso.entitlements")
 if [ -n "$IDENTITY" ]; then
     # 公证要求可信时间戳。
-    codesign "${SIGN_FLAGS[@]}" --timestamp --sign "$IDENTITY" "$APP"
+    SIGN_FLAGS+=(--timestamp --sign "$IDENTITY")
 else
     echo "WARNING: no signing identity found; using ad-hoc signing (permissions reset on every rebuild)." >&2
-    codesign "${SIGN_FLAGS[@]}" --sign - "$APP"
+    SIGN_FLAGS+=(--sign -)
 fi
+codesign "${SIGN_FLAGS[@]}" "$APP/Contents/MacOS/sayso-shell"
+codesign "${SIGN_FLAGS[@]}" "$APP"
 codesign --verify "$APP"
 echo "Built $APP"
 echo "Designated requirement: $(codesign -d -r- "$APP" 2>&1 | sed -n 's/^designated => //p')"

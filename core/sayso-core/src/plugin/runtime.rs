@@ -8,6 +8,7 @@ use rquickjs::loader::{BuiltinLoader, BuiltinResolver, ImportAttributes, Resolve
 use rquickjs::prelude::Async;
 use rquickjs::{AsyncContext, AsyncRuntime, Ctx, Exception, Function, Module, Object, Value};
 
+use super::shell;
 use super::{Host, Instruction, Plugin, PluginSource, RunResult, RunStatus};
 use crate::error::CoreError;
 use crate::protocol::{Capability, Delivery, Event, EventType, LanguagePair, Manifest};
@@ -19,6 +20,9 @@ const LOG_LIMIT: usize = 4096;
 
 /// 执行插件对一个事件的处理，施加超时、错误隔离与能力校验。
 pub async fn run(plugin: &Plugin, event: &Event, host: Arc<dyn Host>) -> RunResult {
+    let shell = shell::Scope::new();
+    let _cancel_shell = shell::CancelOnDrop(shell.clone());
+    let deadline = Instant::now() + plugin.manifest.timeout();
     let invocation = Arc::new(Invocation {
         manifest: plugin.manifest.clone(),
         event_type: event.event_type(),
@@ -27,15 +31,16 @@ pub async fn run(plugin: &Plugin, event: &Event, host: Arc<dyn Host>) -> RunResu
         host,
         warnings: Mutex::default(),
         log: Mutex::default(),
+        shell: shell.clone(),
+        deadline,
     });
     let timeout = plugin.manifest.timeout();
-    let status =
-        match tokio::time::timeout(timeout, execute(plugin, event, invocation.clone(), Instant::now() + timeout)).await
-        {
-            Ok(Ok(())) => RunStatus::Succeeded,
-            Ok(Err(Failure::TimedOut)) | Err(_) => RunStatus::TimedOut,
-            Ok(Err(Failure::Error(message))) => RunStatus::Failed { message },
-        };
+    let status = match tokio::time::timeout(timeout, execute(plugin, event, invocation.clone(), deadline)).await {
+        Ok(Ok(())) => RunStatus::Succeeded,
+        Ok(Err(Failure::TimedOut)) | Err(_) => RunStatus::TimedOut,
+        Ok(Err(Failure::Error(message))) => RunStatus::Failed { message },
+    };
+    shell.close().await;
     let warnings = invocation.warnings.lock().unwrap().clone();
     let log = invocation.log.lock().unwrap().clone();
     RunResult { extension_id: plugin.manifest.id.clone(), status, warnings, log }
@@ -213,6 +218,17 @@ fn install<'js>(ctx: &Ctx<'js>, invocation: Arc<Invocation>) -> rquickjs::Result
     )?;
 
     let inserter = invocation;
+    let runner = inserter.clone();
+    native.set(
+        "shell",
+        Function::new(
+            ctx.clone(),
+            Async(move |ctx: Ctx<'js>, script: String, options: String| {
+                let invocation = runner.clone();
+                async move { invocation.shell(script, &options).await.map_err(|error| throw(&ctx, error)) }
+            }),
+        )?,
+    )?;
     native.set(
         "insert",
         Function::new(
@@ -245,6 +261,8 @@ struct Invocation {
     host: Arc<dyn Host>,
     warnings: Mutex<Vec<String>>,
     log: Mutex<String>,
+    shell: Arc<shell::Scope>,
+    deadline: Instant,
 }
 
 impl Invocation {
@@ -312,6 +330,15 @@ impl Invocation {
     fn records(&self, collection: &str) -> Result<String, CoreError> {
         self.require(Capability::Store)?;
         Ok(serde_json::to_string(&self.host.records(collection)?)?)
+    }
+
+    async fn shell(&self, script: String, options: &str) -> Result<String, CoreError> {
+        self.require(Capability::Shell)?;
+        let options: shell::Options =
+            serde_json::from_str(options).map_err(|error| CoreError::Shell(error.to_string()))?;
+        let cwd = self.resolve(options.cwd.as_deref().unwrap_or("."))?;
+        let output = self.shell.run(script, options, cwd, self.deadline, self.host.shell_lifetime()).await?;
+        Ok(serde_json::to_string(&output)?)
     }
 
     fn fs(&self, op: &str, path: &str, text: &str) -> Result<String, CoreError> {

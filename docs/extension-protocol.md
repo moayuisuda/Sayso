@@ -92,6 +92,7 @@
 | `publish` | `sayso.publish`，处理 `command` 时广播 `translated` hook |
 | `fs` | `sayso.fs.*`，读写扩展目录与用户配置的路径（如 Obsidian 库） |
 | `context` | `sayso.context.set`，设置提供给语音识别与翻译模型的背景 |
+| `shell` | `sayso.shell.run`，执行跨平台脚本和本机程序；程序以当前用户权限运行，可读写文件和访问网络 |
 
 外部扩展默认关闭。在「设置 → 扩展」启用时，Sayso 列出它订阅的事件与声明的能力，由用户确认。
 
@@ -231,7 +232,7 @@ export function focus(event) { … }
 ## 4. `sayso` API
 
 Sayso 在每个扩展的上下文中注入全局对象 `sayso`。块、数据、朗读、广播是**指令**，调用即生效、没有返回值；
-模型、写入、读取数据、文件是**请求**（`sayso.store.list`、`sayso.llm`、`sayso.insert` 返回 Promise）。
+模型、写入、读取数据、文件、脚本执行是**请求**（`sayso.store.list`、`sayso.llm`、`sayso.insert`、`sayso.shell.run` 返回 Promise）。
 指令出错（内容无法识别、未声明能力）不会中断扩展，只被忽略并记为警告，显示在扩展管理页的最近一次执行状态中；请求出错（未声明能力、未配置模型、模型调用失败等）抛出异常。
 
 | API | 能力 | 说明 |
@@ -251,11 +252,42 @@ Sayso 在每个扩展的上下文中注入全局对象 `sayso`。块、数据、
 | `sayso.context.set(text)` | `context` | 替换提供给语音识别与翻译模型的背景，下一次录音与模型请求生效；超过 400 字时截断。只保存在内存中，多个扩展设置时以最后一次为准，声明了该能力的扩展被停用时清空 |
 | `sayso.text.mayContainNative(text)` | — | 文本是否可能夹杂本地语言；纯目标语言的文本可以跳过模型调用 |
 | `sayso.fs.readText(path)` / `writeText(path, text)` / `appendText(path, text)` / `exists(path)` / `mkdir(path)` | `fs` | 同步读写 UTF-8 文本文件；相对路径相对扩展目录，`~/` 展开为用户主目录；`mkdir` 会创建中间目录 |
+| `await sayso.shell.run(script, options?)` | `shell` | 执行跨平台脚本，返回 `{ exitCode, stdout, stderr }`，详见下文 |
 | `console.log(…)` 等 | — | 输出的末尾 4KB 显示在扩展管理页的「最近一次运行」中 |
 
 - 块 id 只在本扩展内唯一，Sayso 按来源分组，不同扩展之间不会冲突。以 `@` 开头的块 id 留给 Sayso 在扩展分组中代画的块（如词条卡片 `@term-0`），扩展不能用它新增或移除块，只能附加按钮。
 - 集合名只允许字母、数字、`_`、`-`。记录的 `key`、`createdAt`、`updatedAt` 由 Sayso 维护，扩展写入同名字段会被忽略。
 - 数据写入由 Sayso 串行、原子落盘，多个事件并发处理时不会写坏数据。
+
+### 跨平台 shell
+
+脚本由随应用打包的 `sayso-shell` 进程使用 `deno_task_shell` 解析和执行，macOS 与 Windows 共用同一套 shell 语法，无需安装 Deno、Bash 或 PowerShell。
+支持管道、重定向、环境变量、`&&` / `||`，以及 `cat`、`head`、`echo`、`mkdir`、`cp`、`mv` 等内置命令。
+它支持部分 sh/bash 语法，完整语法见 [Deno task 文档](https://docs.deno.com/runtime/reference/cli/task/)；Git、Python 等外部程序仍需本机安装并能通过 PATH 或路径找到。
+
+清单中声明 `"capabilities": ["shell"]` 后即可调用：
+
+```js
+const result = await sayso.shell.run("cat | head -n 1", {
+  stdin: event.input.text,
+  timeoutMs: 3000,
+});
+if (result.exitCode !== 0) throw new Error(result.stderr);
+console.log(result.stdout);
+```
+
+| `options` 字段 | 默认值 | 说明 |
+| --- | --- | --- |
+| `cwd` | 扩展目录 | 工作目录；相对路径相对扩展目录，`~/` 展开为用户主目录；目录必须存在 |
+| `env` | `{}` | 当前进程环境变量的覆盖项，值为字符串；只影响本次调用 |
+| `stdin` | `""` | 标准输入文本，最多 1 MiB；写完关闭输入，不读取应用进程的键盘输入 |
+| `timeoutMs` | 本次事件剩余时间 | 正整数，范围 1–60000；不能延长清单 `timeoutSeconds` 对整个事件的限制，排队等待也计入超时 |
+
+- `stdout`、`stderr` 分别收集并按 UTF-8 解码，无效字节替换为 `�`；两者合计最多 1 MiB，超限时停止执行并抛出异常。
+- 非零退出码正常返回，由扩展决定如何处理；语法错误、参数错误、超时和执行基础设施错误会使 Promise 拒绝。
+- 全应用同时最多执行 4 次 shell 调用，超过时异步排队，不阻塞界面。
+- 事件结束、超时、候选框关闭或宿主取消该事件任务时，仍在执行的脚本会收到停止信号；脚本中的后台命令也受本次调用生命周期约束，不支持持久后台任务。
+- `shell` 是执行本机程序的完整权限，不受扩展目录或 `fs` 能力限制。用户输入应通过 `stdin` 或 `env` 传入，避免把输入直接拼接为脚本。
 
 ### 广播 hook
 
@@ -273,7 +305,7 @@ sayso.publish({ type: "translated", output: "意外发现", pairs: [{ target: "s
 
 ### 运行环境
 
-- 入口与它导入的模块都是 ES 模块，只能用相对路径（`./`、`../`）导入扩展目录内的文件；没有 Node.js、浏览器 API 与网络访问。
+- 入口与它导入的模块都是 ES 模块，只能用相对路径（`./`、`../`）导入扩展目录内的文件；JS 上下文没有 Node.js、浏览器 API 或直接网络 API。声明 `shell` 后可以通过本机程序访问网络。
 - 每个事件新建上下文，模块顶层代码每次都会重新执行；内存上限 64MB。
 - 超过 `timeoutSeconds` 时处理被中断（包括同步死循环），记为超时。处理函数抛出的异常记为失败，原因显示在候选框与扩展管理页。
 

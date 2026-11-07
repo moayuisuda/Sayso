@@ -28,6 +28,9 @@
     }),
     llm: (system, user) => native.llm(system, user),
     insert: (text) => native.insert(text),
+    shell: Object.freeze({
+      run: async (script, options = {}) => JSON.parse(await native.shell(script, JSON.stringify(options))),
+    }),
     text: Object.freeze({
       /** 文本是否可能夹杂本地语言；纯目标语言的文本可以跳过模型调用。 */
       mayContainNative: (text) => native.mayContainNative(text),

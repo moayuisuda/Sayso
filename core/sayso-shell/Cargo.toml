@@ -1,0 +1,11 @@
+[package]
+name = "sayso-shell"
+version = "0.1.0"
+edition = "2021"
+
+[dependencies]
+deno_task_shell = "0.33.3"
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+tempfile = "3"
+tokio = { version = "1", features = ["rt", "time", "process", "io-util"] }

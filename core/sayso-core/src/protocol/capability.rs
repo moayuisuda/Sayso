@@ -18,6 +18,8 @@ pub enum Capability {
     Fs,
     /// 设置提供给语音识别与翻译模型的背景（`sayso.context`）。
     Context,
+    /// 执行跨平台 shell 脚本（`sayso.shell`），可以启动本机程序。
+    Shell,
 }
 
 impl Capability {
@@ -30,6 +32,7 @@ impl Capability {
             Self::Publish => "publish",
             Self::Fs => "fs",
             Self::Context => "context",
+            Self::Shell => "shell",
         }
     }
 }

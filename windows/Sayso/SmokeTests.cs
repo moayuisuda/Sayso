@@ -53,11 +53,45 @@ internal static class SmokeTests
         await Check("Core exposes all services and builtin extensions", async () =>
         {
             if ((await core.Call("asrSources"))!.AsArray().Count != 4) throw new Exception("Expected four ASR services.");
-            if ((await core.Call("extensions"))!.AsArray().Count != 3) throw new Exception("Expected three builtin extensions.");
+            if ((await core.Call("extensions"))!.AsArray().Count != 4) throw new Exception("Expected four builtin extensions.");
             if ((await core.Call("languages"))!.AsArray().Count != 8) throw new Exception("Expected eight languages.");
             await core.Call("setEnabled", new JsonObject { ["id"] = "sayso.wordbook", ["enabled"] = false });
             if ((await core.Call("extensions"))!.AsArray().Single(e => e!["manifest"]!["id"]!.GetValue<string>() == "sayso.wordbook")!["enabled"]!.GetValue<bool>()) throw new Exception("Extension was not disabled.");
             await core.Call("setEnabled", new JsonObject { ["id"] = "sayso.wordbook", ["enabled"] = true });
+        });
+        await Check("Portable shell runs through the native ABI and packaged helper", async () =>
+        {
+            var directory = Path.Combine(App.DataDirectory, "Extensions", "smoke-shell");
+            Directory.CreateDirectory(directory);
+            await File.WriteAllTextAsync(Path.Combine(directory, "extension.json"), """
+                {"schemaVersion":4,"id":"test.smoke.shell","name":"Shell check","main":"main.js",
+                 "events":["focus"],"capabilities":["shell","store"],"timeoutSeconds":10}
+                """);
+            await File.WriteAllTextAsync(Path.Combine(directory, "main.js"), """
+                export async function focus() {
+                  const result = await sayso.shell.run("cat | head -n 1; echo issue >&2; exit 7", {
+                    stdin: "Sayso 中文 🍎\nsecond line\n", timeoutMs: 5000
+                  });
+                  sayso.store.put("checks", "shell", result);
+                }
+                """);
+            await core.Call("reloadExtensions");
+            await core.Call("setEnabled", new JsonObject { ["id"] = "test.smoke.shell", ["enabled"] = true });
+            try
+            {
+                await core.Call("appFocused", new JsonObject { ["id"] = "sayso-shell-check", ["name"] = "Shell check" });
+                var report = Path.Combine(App.DataDirectory, "ExtensionData", "test.smoke.shell", "checks.json");
+                var deadline = DateTime.UtcNow.AddSeconds(10);
+                while (!File.Exists(report))
+                {
+                    if (DateTime.UtcNow >= deadline) throw new Exception("The packaged shell helper did not complete.");
+                    await Task.Delay(50);
+                }
+                var result = JsonNode.Parse(await File.ReadAllTextAsync(report))!.AsArray().Single()!;
+                if (result["exitCode"]!.GetValue<int>() != 7 || result["stdout"]!.GetValue<string>() != "Sayso 中文 🍎\n" || result["stderr"]!.GetValue<string>() != "issue\n")
+                    throw new Exception("The packaged shell result did not survive the JS/native boundary.");
+            }
+            finally { await core.Call("setEnabled", new JsonObject { ["id"] = "test.smoke.shell", ["enabled"] = false }); }
         });
         await Check("Core shortcuts keep input on rekey, move between commands and clear", async () =>
         {
@@ -81,7 +115,7 @@ internal static class SmokeTests
             }
             finally { await core.Call("updateSettings", original); }
         });
-        foreach (var page in new[] { "general", "models", "extensions", "sayso.wordbook" })
+        foreach (var page in new[] { "general", "models", "extensions", "sayso.wordbook", "sayso.context" })
             await Check("WinUI page and layout: " + page, async () => { await window.Navigate(page); await Task.Delay(100); window.ValidateLayout(); });
         await Check("WASAPI capture and 16 kHz PCM conversion", async () =>
         {
@@ -207,10 +241,11 @@ internal static class SmokeTests
             if (saves.Length != 2) throw new Exception("Both translated terms must keep their save action.");
             for (var index = 0; index < speakers.Length; index++)
             {
-                var speakerOrigin = speakers[index].TransformToVisual(content).TransformPoint(new(0, 0));
-                var saveOrigin = saves[index].TransformToVisual(content).TransformPoint(new(0, 0));
-                if (Math.Abs(speakerOrigin.Y + speakers[index].ActualHeight / 2 - saveOrigin.Y - saves[index].ActualHeight / 2) > 1)
-                    throw new Exception("The term speaker and save action must share one row.");
+                // 候选框允许按钮换行，但每个词条的朗读与保存必须属于同一个流式容器。
+                var termRow = Microsoft.UI.Xaml.Media.VisualTreeHelper.GetParent(speakers[index]);
+                var row = Microsoft.UI.Xaml.Media.VisualTreeHelper.GetParent(termRow);
+                if (row is not WrapPanel || !ReferenceEquals(row, Microsoft.UI.Xaml.Media.VisualTreeHelper.GetParent(saves[index])))
+                    throw new Exception("The term speaker and save action must share one wrapping row.");
             }
             candidate.ValidateContentSurface();
             if (inspect) candidate.PrepareForInspection();

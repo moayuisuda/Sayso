@@ -25,9 +25,11 @@ impl Inner {
         }
         // 记录正在处理的扩展：它们处理完之前候选框不会自动隐藏。
         let ids: Vec<String> = recipients.iter().map(|plugin| plugin.id().to_string()).collect();
+        let mut shell_lifetime = None;
         event.surface = surface_id.and_then(|id| {
             self.update_surface(id, |surface| {
                 surface.mark_running(ids);
+                shell_lifetime = Some(surface.shell_lifetime());
                 surface.snapshot()
             })
         });
@@ -53,6 +55,7 @@ impl Inner {
                 surface_id: surface_id.clone(),
                 command: command.clone(),
                 focus: focus.clone(),
+                shell_lifetime: shell_lifetime.clone(),
             });
             let (inner, event, route, surface_id) = (self.clone(), event.clone(), route.clone(), surface_id.clone());
             self.runtime.spawn(async move {
@@ -150,10 +153,15 @@ struct DispatchHost {
     command: Option<CommandContext>,
     /// 处理 `focus` 事件时，事件对应的应用。
     focus: Option<Option<AppInfo>>,
+    shell_lifetime: Option<tokio::sync::watch::Receiver<()>>,
 }
 
 #[async_trait]
 impl Host for DispatchHost {
+    fn shell_lifetime(&self) -> Option<tokio::sync::watch::Receiver<()>> {
+        self.shell_lifetime.clone()
+    }
+
     fn apply(&self, instruction: Instruction) -> Result<(), CoreError> {
         match instruction {
             Instruction::UpsertBlock(block) => {
@@ -182,7 +190,8 @@ impl Host for DispatchHost {
             }
             Instruction::SetContext(text) => {
                 // 每个事件各自运行，快速切换时旧事件可能后完成，不能覆盖当前应用的背景。
-                let current = self.focus.as_ref().is_none_or(|app| self.inner.focused.lock().unwrap().as_ref() == Some(app));
+                let current =
+                    self.focus.as_ref().is_none_or(|app| self.inner.focused.lock().unwrap().as_ref() == Some(app));
                 if current {
                     self.inner.set_context(&text);
                 }

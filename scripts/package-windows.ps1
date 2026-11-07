@@ -15,7 +15,7 @@ if (-not $Compiler) {
     }
 }
 if (-not $Compiler) { throw '请安装 Inno Setup 7，或通过 -Compiler 指定 ISCC.exe。' }
-foreach ($file in @('Sayso.exe', 'sayso_windows_bridge.dll')) {
+foreach ($file in @('Sayso.exe', 'sayso_windows_bridge.dll', 'sayso-shell.exe')) {
     if (-not (Test-Path -LiteralPath (Join-Path $source $file))) { throw "缺少 $file，请先构建 Windows 客户端。" }
 }
 $version = (Get-Item -LiteralPath (Join-Path $source 'Sayso.exe')).VersionInfo.ProductVersion

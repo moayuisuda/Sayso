@@ -12,7 +12,7 @@ BUILD_DIR="$PROJECT_DIR/build"
 GENERATED="$BUILD_DIR/core-bindings"
 XCFRAMEWORK="$BUILD_DIR/SaysoCoreFFI.xcframework"
 
-CARGO_FLAGS=(--manifest-path "$CORE_DIR/Cargo.toml" -p sayso-core)
+CARGO_FLAGS=(--manifest-path "$CORE_DIR/Cargo.toml" -p sayso-core -p sayso-shell)
 [ "$PROFILE" = "release" ] && CARGO_FLAGS+=(--release)
 # 与 Package.swift 的 platforms 保持一致，否则 C 依赖按本机系统版本编译，链接时报版本不匹配。
 export MACOSX_DEPLOYMENT_TARGET=14.0

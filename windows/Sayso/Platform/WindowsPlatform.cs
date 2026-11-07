@@ -37,7 +37,7 @@ internal sealed class WindowsPlatform(DispatcherQueue dispatcher) : IDisposable
                 return new JsonObject { ["id"] = window.ToInt64().ToString(), ["name"] = Process.GetProcessById((int)process).ProcessName };
             case "runningApps":
                 var running = Process.GetProcesses().Where(p => p.Id != Environment.ProcessId && p.MainWindowHandle != 0).Select(p => p.ProcessName).Distinct();
-                return new JsonArray(running.Select(name => (JsonNode)App(name)).ToArray());
+                return new JsonArray(running.Select(name => (JsonNode)CreateAppInfo(name)).ToArray());
             case "copyText": return OnUI(async () => { await ClipboardService.Copy(args!.GetValue<string>()); return null; }).GetAwaiter().GetResult();
             case "openUrl": Open(args!.GetValue<string>()); return null;
             case "speak":
@@ -96,11 +96,11 @@ internal sealed class WindowsPlatform(DispatcherQueue dispatcher) : IDisposable
     {
         NativeMethods.GetWindowThreadProcessId(window, out var process);
         if (window == 0 || process == Environment.ProcessId) return null;
-        try { return App(Process.GetProcessById((int)process).ProcessName); }
+        try { return CreateAppInfo(Process.GetProcessById((int)process).ProcessName); }
         catch (ArgumentException) { return null; }
     }
 
-    private static JsonObject App(string name) => new() { ["id"] = name, ["name"] = name };
+    private static JsonObject CreateAppInfo(string name) => new() { ["id"] = name, ["name"] = name };
 
     public static void Open(string path) => Process.Start(new ProcessStartInfo(path) { UseShellExecute = true });
 

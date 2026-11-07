@@ -25,6 +25,8 @@ pub enum CoreError {
     Platform(#[from] crate::platform::PlatformError),
     #[error("{0}")]
     Update(String),
+    #[error("Shell: {0}")]
+    Shell(String),
     #[error("{0}")]
     Io(String),
 }

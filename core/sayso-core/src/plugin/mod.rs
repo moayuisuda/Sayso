@@ -5,6 +5,7 @@ mod builtin;
 mod catalog;
 mod instruction;
 mod runtime;
+mod shell;
 
 use std::path::PathBuf;
 
@@ -58,6 +59,8 @@ pub trait Host: Send + Sync {
     async fn insert(&self, text: String) -> Result<Delivery, CoreError>;
     /// 读取本插件的某个数据集合。
     fn records(&self, collection: &str) -> Result<Vec<StoreRecord>, CoreError>;
+    /// 候选框的生命周期；发送端销毁时停止该事件启动的 shell。后台事件没有候选框。
+    fn shell_lifetime(&self) -> Option<tokio::sync::watch::Receiver<()>>;
 }
 
 /// 单个插件处理一次事件的结果，显示在扩展管理页。

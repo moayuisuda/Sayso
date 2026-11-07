@@ -28,5 +28,6 @@
     <PackageReference Include="NAudio.Wasapi" Version="2.2.1" />
     <PackageReference Include="System.Speech" Version="10.0.0" />
     <Content Include="..\..\core\target\$(RustProfile)\sayso_windows_bridge.dll" Link="sayso_windows_bridge.dll" CopyToOutputDirectory="PreserveNewest" CopyToPublishDirectory="PreserveNewest" />
+    <Content Include="..\..\core\target\$(RustProfile)\sayso-shell.exe" Link="sayso-shell.exe" CopyToOutputDirectory="PreserveNewest" CopyToPublishDirectory="PreserveNewest" />
   </ItemGroup>
 </Project>

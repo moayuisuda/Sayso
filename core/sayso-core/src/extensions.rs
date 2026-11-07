@@ -238,6 +238,10 @@ pub fn capability_description(capability: Capability) -> String {
             "设置提供给语音识别与翻译模型的背景",
             "Set the background given to the speech and translation models",
         ),
+        Capability::Shell => tr(
+            "执行脚本及本机程序（可读写文件和访问网络）",
+            "Run scripts and local programs (can access files and the network)",
+        ),
     }
 }
 

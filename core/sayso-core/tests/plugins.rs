@@ -1,4 +1,5 @@
 //! 内置插件与插件运行时的行为测试：用伪造的宿主固定模型回复，断言插件输出的指令、写入与投递。
+mod common;
 
 use std::collections::HashSet;
 use std::sync::atomic::{AtomicUsize, Ordering};
@@ -74,6 +75,10 @@ impl FakeHost {
 
 #[async_trait]
 impl Host for FakeHost {
+    fn shell_lifetime(&self) -> Option<tokio::sync::watch::Receiver<()>> {
+        None
+    }
+
     fn apply(&self, instruction: Instruction) -> Result<(), CoreError> {
         if let Instruction::Store(write) = instruction {
             return self.stores.apply(&self.extension_id, write);
@@ -706,7 +711,11 @@ fn install(root: &std::path::Path, manifest: &str, files: &[(&str, &str)]) -> Pl
     }
     let (mut plugins, problems) = load_installed(root, &HashSet::new());
     assert!(problems.is_empty(), "{problems:?}");
-    plugins.remove(0)
+    let plugin = plugins.remove(0);
+    if plugin.manifest.grants(sayso_core::protocol::Capability::Shell) {
+        common::install_shell_executable();
+    }
+    plugin
 }
 
 fn manifest(capabilities: &str, timeout: u32) -> String {
@@ -790,6 +799,238 @@ async fn runtime_interrupts_busy_loops() {
     )
     .await;
     assert_eq!(result.status, RunStatus::TimedOut);
+}
+
+/// 权限必须在解析或执行脚本之前校验，不能通过文件副作用绕过。
+#[tokio::test]
+async fn shell_requires_its_own_capability() {
+    let root = tempfile::tempdir().unwrap();
+    let plugin = install(
+        root.path(),
+        &manifest(r#"["fs"]"#, 5),
+        &[(
+            "main.js",
+            r#"
+        export async function translated() {
+          try { await sayso.shell.run("echo denied > denied.txt"); }
+          catch (error) { console.log(error.message); }
+        }
+    "#,
+        )],
+    );
+    let (_directory, stores) = temporary_stores();
+    let host = FakeHost::new("test.plugin", "", Delivery::Inserted, stores);
+    let result = run(&plugin, &translated("", "", vec![], None), host).await;
+    assert_eq!(result.status, RunStatus::Succeeded);
+    assert!(result.log.contains("Capability not declared: shell"), "{result:?}");
+    assert!(!plugin.directory().unwrap().join("denied.txt").exists());
+}
+
+/// 真正执行统一 shell：覆盖管道、重定向、Unicode stdin、环境变量及含空格的相对工作目录。
+#[tokio::test]
+async fn shell_runs_portable_scripts_and_preserves_results() {
+    let root = tempfile::tempdir().unwrap();
+    let plugin = install(
+        root.path(),
+        &manifest(r#"["shell"]"#, 5),
+        &[(
+            "main.js",
+            r#"
+        export async function translated() {
+          const result = await sayso.shell.run(
+            'cat | head -n 1 > input.txt; echo "$SAYSO_TEST_VALUE"; cat input.txt; echo issue >&2; exit 7',
+            { cwd: "工作 空间", env: { SAYSO_TEST_VALUE: "环境 🍎" }, stdin: "中文 ; $literal\n第二行\n" }
+          );
+          if (result.exitCode !== 7 || result.stdout !== "环境 🍎\n中文 ; $literal\n" || result.stderr !== "issue\n")
+            throw new Error(JSON.stringify(result));
+          const missing = await sayso.shell.run("sayso_missing_test_command");
+          if (missing.exitCode !== 127 || !missing.stderr) throw new Error("Missing command was not reported");
+          const next = await sayso.shell.run("echo $SAYSO_TEST_VALUE");
+          if (next.stdout !== "\n") throw new Error("Environment leaked between calls");
+        }
+    "#,
+        )],
+    );
+    let workspace = plugin.directory().unwrap().join("工作 空间");
+    std::fs::create_dir(&workspace).unwrap();
+    let (_directory, stores) = temporary_stores();
+    let result =
+        run(&plugin, &translated("", "", vec![], None), FakeHost::new("test.plugin", "", Delivery::Inserted, stores))
+            .await;
+    assert_eq!(result.status, RunStatus::Succeeded, "{result:?}");
+    assert_eq!(std::fs::read_to_string(workspace.join("input.txt")).unwrap(), "中文 ; $literal\n");
+}
+
+/// stdout 与 stderr 同时排空；超限时中断，不保留无限增长的字符串。
+#[tokio::test]
+async fn shell_bounds_output_and_rejects_invalid_requests() {
+    let root = tempfile::tempdir().unwrap();
+    let plugin = install(
+        root.path(),
+        &manifest(r#"["shell"]"#, 5),
+        &[(
+            "main.js",
+            r#"
+        export async function translated() {
+          for (const [script, options, expected] of [
+            ["echo (", {}, "Shell:"],
+            ["echo ok", { timeoutMs: 0 }, "timeoutMs"],
+            ["echo ok", { env: { "BAD=KEY": "x" } }, "environment"],
+            ["echo ok", { stdin: "x".repeat(1048577) }, "stdin"],
+            ["cat large.txt & cat large.txt >&2", {}, "1 MiB"],
+          ]) {
+            let rejected = false;
+            try { await sayso.shell.run(script, options); }
+            catch (error) { rejected = error.message.includes(expected); }
+            if (!rejected) throw new Error(`Expected rejection: ${expected}`);
+          }
+          const recovered = await sayso.shell.run("echo recovered");
+          if (recovered.stdout !== "recovered\n") throw new Error("Output limit broke later calls");
+          const binary = await sayso.shell.run("cat binary.bin; echo issue >&2");
+          if (binary.stdout.length !== 600000 || binary.stderr !== "issue\n")
+            throw new Error("UTF-8 replacement must not change the byte budget");
+        }
+    "#,
+        )],
+    );
+    std::fs::write(plugin.directory().unwrap().join("large.txt"), vec![b'x'; 800_000]).unwrap();
+    std::fs::write(plugin.directory().unwrap().join("binary.bin"), vec![0xff; 600_000]).unwrap();
+    let (_directory, stores) = temporary_stores();
+    let result =
+        run(&plugin, &translated("", "", vec![], None), FakeHost::new("test.plugin", "", Delivery::Inserted, stores))
+            .await;
+    assert_eq!(result.status, RunStatus::Succeeded, "{result:?}");
+}
+
+/// 独立测试进程持续写入心跳，供取消测试验证实际进程已退出，而非只结束等待。
+#[test]
+#[ignore = "invoked only as the real subprocess fixture"]
+fn shell_child_process() {
+    use std::io::Write;
+    let marker = std::env::var_os("SAYSO_SHELL_TEST_MARKER").unwrap();
+    let _child = std::env::var_os("SAYSO_SHELL_TEST_CHILD_MARKER").map(|marker| {
+        std::process::Command::new(std::env::current_exe().unwrap())
+            .args(["--ignored", "--exact", "shell_child_process", "--nocapture"])
+            .env("SAYSO_SHELL_TEST_MARKER", marker)
+            .env_remove("SAYSO_SHELL_TEST_CHILD_MARKER")
+            .spawn()
+            .unwrap()
+    });
+    let noisy = std::env::var("SAYSO_SHELL_TEST_OUTPUT").is_ok_and(|value| value == "1");
+    let mut file = std::fs::OpenOptions::new().append(true).create(true).open(marker).unwrap();
+    loop {
+        file.write_all(b"tick\n").unwrap();
+        file.flush().unwrap();
+        if noisy {
+            std::io::stdout().write_all(&[b'x'; 131072]).unwrap();
+            std::io::stderr().write_all(&[b'y'; 131072]).unwrap();
+        }
+        std::thread::sleep(std::time::Duration::from_millis(20));
+    }
+}
+
+fn shell_process_script() -> String {
+    let executable = std::env::current_exe().unwrap().to_string_lossy().replace('\\', "/").replace('\'', "'\"'\"'");
+    format!("'{executable}' --ignored --exact shell_child_process --nocapture")
+}
+
+async fn wait_for_shell_marker(marker: &std::path::Path) {
+    tokio::time::timeout(std::time::Duration::from_secs(4), async {
+        while !marker.exists() {
+            tokio::time::sleep(std::time::Duration::from_millis(10)).await;
+        }
+    })
+    .await
+    .expect("shell subprocess must start");
+}
+
+async fn assert_shell_process_stopped(marker: &std::path::Path) {
+    let length = std::fs::metadata(marker).unwrap().len();
+    tokio::time::sleep(std::time::Duration::from_millis(150)).await;
+    assert_eq!(std::fs::metadata(marker).unwrap().len(), length, "shell subprocess kept running after cancellation");
+}
+
+/// 每次调用的超时、整个事件的超时与未 await 的脚本都必须结束真实外部进程。
+#[tokio::test]
+async fn shell_stops_processes_on_timeouts_and_event_completion() {
+    for mode in ["call", "event", "unawaited", "tree", "output"] {
+        let root = tempfile::tempdir().unwrap();
+        let marker = root.path().join("heartbeat");
+        let script = serde_json::to_string(&shell_process_script()).unwrap();
+        let child_marker = root.path().join("child-heartbeat");
+        let mut env = serde_json::json!({ "SAYSO_SHELL_TEST_MARKER": marker });
+        if mode == "tree" {
+            env["SAYSO_SHELL_TEST_CHILD_MARKER"] = serde_json::json!(child_marker);
+        }
+        if mode == "output" {
+            env["SAYSO_SHELL_TEST_OUTPUT"] = serde_json::json!("1");
+        }
+        let env = env.to_string();
+        let body = match mode {
+            "call" | "tree" => format!("await sayso.shell.run({script}, {{ env: {env}, timeoutMs: 3000 }});"),
+            "event" | "output" => format!("await sayso.shell.run({script}, {{ env: {env} }});"),
+            _ => format!(
+                r#"
+                sayso.shell.run({script}, {{ env: {env} }}).catch(() => {{}});
+                while (!sayso.fs.exists({marker})) await sayso.shell.run("sleep 0.02");
+            "#,
+                marker = serde_json::to_string(&marker).unwrap()
+            ),
+        };
+        let source = format!("export async function translated() {{ {body} }}");
+        let plugin = install(
+            root.path(),
+            &manifest(r#"["shell","fs"]"#, if mode == "event" { 4 } else { 10 }),
+            &[("main.js", &source)],
+        );
+        let (_directory, stores) = temporary_stores();
+        let result = run(
+            &plugin,
+            &translated("", "", vec![], None),
+            FakeHost::new("test.plugin", "", Delivery::Inserted, stores),
+        )
+        .await;
+        match mode {
+            "call" | "tree" => assert!(
+                matches!(result.status, RunStatus::Failed { ref message } if message.contains("timed out")),
+                "{result:?}"
+            ),
+            "event" => assert_eq!(result.status, RunStatus::TimedOut, "{result:?}"),
+            "output" => assert!(
+                matches!(result.status, RunStatus::Failed { ref message } if message.contains("1 MiB")),
+                "{result:?}"
+            ),
+            _ => assert_eq!(result.status, RunStatus::Succeeded, "{result:?}"),
+        }
+        assert!(marker.exists(), "the subprocess must have actually run: {mode} {result:?}");
+        assert_shell_process_stopped(&marker).await;
+        if mode == "tree" {
+            assert!(child_marker.exists(), "the real subprocess must have spawned its own child");
+            assert_shell_process_stopped(&child_marker).await;
+        }
+    }
+}
+
+/// 宿主丢弃事件 Future 时，RAII 取消信号仍然能结束工作线程内的进程。
+#[tokio::test]
+async fn shell_stops_processes_when_the_invocation_is_aborted() {
+    let root = tempfile::tempdir().unwrap();
+    let marker = root.path().join("heartbeat");
+    let source = format!(
+        "export async function translated() {{ await sayso.shell.run({}, {{ env: {} }}); }}",
+        serde_json::to_string(&shell_process_script()).unwrap(),
+        serde_json::json!({ "SAYSO_SHELL_TEST_MARKER": marker })
+    );
+    let plugin = install(root.path(), &manifest(r#"["shell"]"#, 5), &[("main.js", &source)]);
+    let (_directory, stores) = temporary_stores();
+    let host = FakeHost::new("test.plugin", "", Delivery::Inserted, stores);
+    let task = tokio::spawn(async move { run(&plugin, &translated("", "", vec![], None), host).await });
+    wait_for_shell_marker(&marker).await;
+    task.abort();
+    assert!(task.await.unwrap_err().is_cancelled());
+    // 工作线程通过异步信号回收进程，先等待一次调度再检查心跳不再增长。
+    tokio::time::sleep(std::time::Duration::from_millis(100)).await;
+    assert_shell_process_stopped(&marker).await;
 }
 
 /// 仓库中的示例扩展都能按 v4 加载，并能处理各自订阅的 hook 与按钮回调。

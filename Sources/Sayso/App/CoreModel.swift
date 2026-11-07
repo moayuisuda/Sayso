@@ -269,7 +269,8 @@ extension CoreError {
         switch self {
         case .InvalidManifest(let message), .InvalidInstruction(let message), .CapabilityNotGranted(let message),
              .ModelNotConfigured(let message), .InsertOutsideCommand(let message), .InvalidPackage(let message),
-             .Llm(let message), .Recognition(let message), .Platform(let message), .Update(let message), .Io(let message):
+             .Llm(let message), .Recognition(let message), .Platform(let message), .Update(let message),
+             .Shell(let message), .Io(let message):
             return message
         }
     }

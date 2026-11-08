@@ -1,9 +1,10 @@
-// 应用背景：切换应用时，用该应用这一行的文本作为背景；没有对应行或文本为空时用默认行。
+// 应用背景：默认行是通用背景（身份、常用词），应用行是该应用的补充；切换应用时两者按此顺序拼接为背景。
 const DEFAULT_ROW = "default";
 
 export async function focus(event) {
   const rows = await sayso.store.list("contexts");
-  const appRow = rows.find((row) => row.appId && row.appId === event.app?.id && row.text.trim());
-  const row = appRow ?? rows.find((row) => row.key === DEFAULT_ROW);
-  sayso.context.set(row?.text ?? "");
+  const base = rows.find((row) => row.key === DEFAULT_ROW);
+  const app = event.app?.id && rows.find((row) => row.appId === event.app.id);
+  const texts = [base, app].map((row) => row?.text.trim()).filter(Boolean);
+  sayso.context.set(texts.join("\n"));
 }

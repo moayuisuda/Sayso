@@ -212,13 +212,14 @@ async fn context_for(rows: &[(&str, Option<&str>, &str)], app: Option<&str>) -> 
 }
 
 #[tokio::test]
-async fn app_context_prefers_the_app_row_and_falls_back_to_the_default_row() {
-    let rows = [("default", None, "base"), ("a", Some("id.xcode"), "swift"), ("b", Some("id.slack"), "  ")];
+async fn app_context_appends_the_app_row_to_the_default_row() {
+    let rows = [("default", None, " base "), ("a", Some("id.xcode"), "swift"), ("b", Some("id.slack"), "  ")];
     let set = |text: &str| vec![Instruction::SetContext(text.into())];
-    assert_eq!(context_for(&rows, Some("id.xcode")).await, set("swift"));
+    assert_eq!(context_for(&rows, Some("id.xcode")).await, set("base\nswift"));
     assert_eq!(context_for(&rows, Some("id.notes")).await, set("base"));
     assert_eq!(context_for(&rows, Some("id.slack")).await, set("base"));
     assert_eq!(context_for(&rows, None).await, set("base"));
+    assert_eq!(context_for(&rows[1..], Some("id.xcode")).await, set("swift"));
     assert_eq!(context_for(&[], Some("id.xcode")).await, set(""));
 }
 

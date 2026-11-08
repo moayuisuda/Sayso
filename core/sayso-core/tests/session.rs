@@ -296,7 +296,7 @@ fn dictate(core: &Core, server: &LocalAsr) -> String {
     server.forms.lock().unwrap().last().expect("speech service was called").clone()
 }
 
-/// 背景按前台应用切换：有对应行时用该行，切到其他应用时回到默认行，改表后立即生效。
+/// 背景按前台应用切换：有对应行时默认行之后接上该行，切到其他应用时只剩默认行，改表后立即生效。
 #[test]
 fn speech_recognition_uses_the_context_of_the_focused_app() {
     let (_data, core, _platform, observer, server) = fixture(Some(""));
@@ -309,10 +309,11 @@ fn speech_recognition_uses_the_context_of_the_focused_app() {
     save("xcode", Some(xcode.clone()), "swift background");
 
     focus(&core, &observer, Some(xcode));
-    assert!(dictate(&core, &server).contains("swift background"));
+    assert!(dictate(&core, &server).contains("default background\nswift background"));
 
     focus(&core, &observer, Some(notes));
-    assert!(dictate(&core, &server).contains("default background"));
+    let form = dictate(&core, &server);
+    assert!(form.contains("default background") && !form.contains("swift background"));
 
     let before = observer.extension_updates.load(Ordering::SeqCst);
     save(DEFAULT_ROW, None, "edited background");

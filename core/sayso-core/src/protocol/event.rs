@@ -3,16 +3,10 @@ use serde::{Deserialize, Serialize};
 use super::{Block, Json, LanguagePair, SCHEMA_VERSION};
 use crate::store::StoreRecord;
 
-/// 扩展事件类型。新增事件只增加 case，已发布的名称不可修改。
-///
-/// 扩展分两种：后处理扩展（如混说翻译、互译）声明命令，由快捷键触发，接收 `command`，
-/// 并在处理的各个环节广播 hook；事件式扩展（如生词本）只订阅 hook，
-/// 可以往候选框添加块和按钮，用户点击后以 `action` 回调。内置扩展与第三方扩展都可以是任一种。
+/// 扩展订阅的事件，语音识别和划词共用 `input`。
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, Serialize, Deserialize, uniffi::Enum)]
 #[serde(rename_all = "lowercase")]
 pub enum EventType {
-    /// 用户触发了该扩展的命令（定向，只发给后处理扩展）。
-    Command,
     /// 用户点击了该扩展块上的 invoke 操作（定向）。
     Action,
     /// hook：输入已准备好，交给后处理扩展处理（由 Sayso 广播）。
@@ -28,7 +22,6 @@ pub enum EventType {
 impl EventType {
     pub fn name(self) -> &'static str {
         match self {
-            Self::Command => "command",
             Self::Action => "action",
             Self::Input => "input",
             Self::Translated => "translated",
@@ -44,7 +37,7 @@ pub fn event_name(event: EventType) -> String {
     event.name().to_owned()
 }
 
-/// 命令输入的来源，由用户为命令的快捷键设置。
+/// Sayso 文本输入的来源。
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, Serialize, Deserialize, uniffi::Enum)]
 #[serde(rename_all = "lowercase")]
 pub enum InputSource {
@@ -54,7 +47,7 @@ pub enum InputSource {
     Selection,
 }
 
-/// Sayso 交给命令的统一输入：语音与选区已经变成同一种文本。
+/// Sayso 广播的统一输入，语音和选区都提供文本。
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub struct Input {
     /// 已去除首尾空白，非空。
@@ -104,12 +97,6 @@ pub struct Event {
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 #[serde(tag = "type", rename_all = "lowercase")]
 pub enum Payload {
-    Command {
-        command: CommandRef,
-        input: Input,
-        /// 触发命令时的前台应用。
-        source: Option<AppInfo>,
-    },
     Action {
         action: ActionInvocation,
     },
@@ -130,11 +117,6 @@ pub enum Payload {
         /// 切换到的应用；回到 Sayso 自身或没有前台应用时为 null。
         app: Option<AppInfo>,
     },
-}
-
-#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
-pub struct CommandRef {
-    pub id: String,
 }
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
@@ -201,7 +183,6 @@ impl Event {
 
     pub fn event_type(&self) -> EventType {
         match self.payload {
-            Payload::Command { .. } => EventType::Command,
             Payload::Action { .. } => EventType::Action,
             Payload::Input { .. } => EventType::Input,
             Payload::Translated(_) => EventType::Translated,
@@ -223,18 +204,17 @@ mod tests {
     use super::*;
 
     #[test]
-    fn command_event_is_flat_and_round_trips() {
+    fn input_event_is_flat_and_round_trips() {
         let event = Event::new(
             LanguagePair::default(),
             None,
-            Payload::Command {
-                command: CommandRef { id: "add".into() },
+            Payload::Input {
                 input: Input { text: "买牛奶".into(), via: InputSource::Selection },
                 source: Some(AppInfo { id: Some("com.apple.Notes".into()), name: Some("Notes".into()) }),
             },
         );
         let json = event.to_json();
-        assert_eq!(json["type"], "command");
+        assert_eq!(json["type"], "input");
         assert_eq!(json["schemaVersion"], SCHEMA_VERSION);
         assert_eq!(json["input"]["via"], "selection");
         assert_eq!(json["languages"]["native"], "zh");

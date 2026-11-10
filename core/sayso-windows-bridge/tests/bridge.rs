@@ -93,25 +93,17 @@ fn extension_package_roundtrip_preserves_code_and_updates_core_catalog() {
 }
 
 #[test]
-fn shortcuts_preserve_input_and_persist_across_the_abi() {
+fn disabling_extensions_does_not_disable_input_shortcuts() {
     let directory = tempfile::tempdir().unwrap();
-    let command = json!({"extensionId":"sayso.selection","commandId":"translate"});
     let destination = json!({"keyCode":89,"modifiers":1});
-    let input_at = |settings: &Value| {
-        settings["shortcuts"].as_array().unwrap().iter().find(|s| s["key"] == destination).map(|s| s["input"].clone())
-    };
     {
         let client = Client::new(directory.path());
-        let settings = client.call("setShortcut", json!({"command":command,"key":destination}));
-        assert_eq!(input_at(&settings), Some(json!("selection")));
-        assert!(!settings["shortcuts"].as_array().unwrap().iter().any(|s| s["key"]["keyCode"] == 0x54));
-        let active = client.call("activeShortcuts", Value::Null);
-        assert!(active.as_array().unwrap().contains(&destination));
-        client.call("setShortcutInput", json!({"command":command,"input":"speech"}));
+        let settings = client.call("setShortcut", json!({"input":"selection","key":destination}));
+        assert!(settings["shortcuts"].as_array().unwrap().contains(&json!({"input":"selection","key":destination})));
+        client.call("setEnabled", json!({"id":"sayso.selection","enabled":false}));
+        assert_eq!(client.call("settings", Value::Null)["shortcuts"], settings["shortcuts"]);
     }
     let client = Client::new(directory.path());
-    assert_eq!(input_at(&client.call("settings", Value::Null)), Some(json!("speech")));
-    let settings = client.call("setShortcut", json!({"command":command,"key":null}));
-    assert_eq!(input_at(&settings), None);
-    assert!(!client.call("activeShortcuts", Value::Null).as_array().unwrap().contains(&destination));
+    assert!(client.call("activeShortcuts", Value::Null).as_array().unwrap().contains(&destination));
+
 }

@@ -63,9 +63,9 @@ private struct MenuBarContent: View {
             Button(L("新版本 \(update.version) 可下载…", "Download version \(update.version)…")) { NSWorkspace.shared.open(url) }
             Divider()
         }
-        ForEach(model.enabledCommands) { command in
-            if let shortcut = model.shortcut(of: command.key) {
-                Text("\(command.spec.title)：\(shortcut.key.displayName)")
+        ForEach(InputSource.allCases) { input in
+            if let key = model.shortcut(for: input) {
+                Text("\(input.displayName)：\(key.displayName)")
             }
         }
         Text("\(name(settings.targetLanguage)) ← \(name(settings.nativeLanguage))")

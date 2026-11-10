@@ -2,9 +2,8 @@ use std::time::Duration;
 
 use serde::{Deserialize, Serialize};
 
-use super::{json, Block, Capability, EventType, InputSource, Json, BUILT_IN_PREFIX, SCHEMA_VERSION};
+use super::{json, Block, Capability, EventType, Json, BUILT_IN_PREFIX, SCHEMA_VERSION};
 use crate::error::CoreError;
-use crate::l10n::tr;
 use crate::store::{is_valid_collection_name, StoreRecord};
 
 /// 扩展清单 `extension.json`。内置扩展的清单随 core 编译嵌入，格式相同。
@@ -26,22 +25,6 @@ pub struct Manifest {
     pub capabilities: Vec<Capability>,
     #[serde(default)]
     pub tab: Option<TabSpec>,
-    /// 扩展提供的命令，由用户设置的快捷键触发，以 `command` 事件交给本扩展。
-    #[serde(default)]
-    pub commands: Vec<CommandSpec>,
-}
-
-/// 扩展命令。命令本身只接收统一的 `input.text`；没有声明 `input` 时，输入来源由用户为快捷键设置。
-#[derive(Clone, Debug, PartialEq, Serialize, Deserialize, uniffi::Record)]
-pub struct CommandSpec {
-    pub id: String,
-    pub title: String,
-    /// 界面语言不是中文时显示的名称；没有时都显示 `title`。
-    #[serde(default, rename = "titleEn")]
-    pub title_en: Option<String>,
-    /// 命令固定的输入来源，界面不再提供选择。
-    #[serde(default)]
-    pub input: Option<InputSource>,
 }
 
 /// 扩展页签：按模板渲染扩展的某个数据集合。
@@ -92,23 +75,7 @@ pub enum SortOrder {
     Desc,
 }
 
-impl CommandSpec {
-    /// 当前界面语言下的名称。
-    pub fn localized_title(&self) -> String {
-        self.title_en.as_ref().map_or_else(|| self.title.clone(), |english| tr(&self.title, english))
-    }
-}
-
 impl Manifest {
-    /// 交给界面的清单：命令名已换成当前界面语言。
-    pub fn localized(&self) -> Self {
-        let mut manifest = self.clone();
-        for command in &mut manifest.commands {
-            command.title = command.localized_title();
-        }
-        manifest
-    }
-
     pub fn is_built_in(&self) -> bool {
         self.id.starts_with(BUILT_IN_PREFIX)
     }
@@ -137,17 +104,6 @@ impl Manifest {
         }
         if self.main.trim().is_empty() {
             return fail("main is required".into());
-        }
-        if !self.commands.is_empty() {
-            if !self.events.contains(&EventType::Command) {
-                return fail("commands require the command event".into());
-            }
-            let mut ids: Vec<&str> = self.commands.iter().map(|command| command.id.as_str()).collect();
-            ids.sort_unstable();
-            ids.dedup();
-            if ids.len() != self.commands.len() || self.commands.iter().any(|c| c.id.is_empty() || c.title.is_empty()) {
-                return fail("command ids must be unique and titles non-empty".into());
-            }
         }
         if let Some(tab) = &self.tab {
             if !self.grants(Capability::Store) {

@@ -93,30 +93,42 @@ internal static class SmokeTests
             }
             finally { await core.Call("setEnabled", new JsonObject { ["id"] = "test.smoke.shell", ["enabled"] = false }); }
         });
-        await Check("Core shortcuts keep input on rekey, move between commands and clear", async () =>
+        await Check("Disabling the built-in extension preserves the Sayso shortcut", async () =>
         {
             var original = (await core.Call("settings"))!;
-            var key = new JsonObject { ["keyCode"] = 89, ["modifiers"] = 1 };
-            JsonObject Shortcut(string extension, bool set = true) => new()
-            {
-                ["command"] = new JsonObject { ["extensionId"] = extension, ["commandId"] = "translate" },
-                ["key"] = set ? key.DeepClone() : null
-            };
-            JsonNode? At(JsonNode settings) => settings["shortcuts"]!.AsArray().SingleOrDefault(s => JsonNode.DeepEquals(s!["key"], key));
+            var shortcuts = original["shortcuts"];
+            var key = shortcuts!.AsArray().Single(item => item!["input"]!.GetValue<string>() == "speech")!["key"];
             try
             {
-                var updated = (await core.Call("setShortcut", Shortcut("sayso.selection")))!;
-                if (At(updated)?["input"]!.GetValue<string>() != "selection") throw new Exception("Rekeying lost the selection input source.");
-                updated = (await core.Call("setShortcut", Shortcut("sayso.dictation")))!;
-                if (At(updated)?["command"]!["extensionId"]!.GetValue<string>() != "sayso.dictation") throw new Exception("The shortcut did not move to the new command.");
-                if (updated["shortcuts"]!.AsArray().Any(s => s!["command"]!["extensionId"]!.GetValue<string>() == "sayso.selection")) throw new Exception("The previous command kept the shortcut.");
-                updated = (await core.Call("setShortcut", Shortcut("sayso.dictation", false)))!;
-                if (At(updated) is not null) throw new Exception("A cleared shortcut was retained.");
+                await core.Call("setEnabled", new JsonObject { ["id"] = "sayso.dictation", ["enabled"] = false });
+                var updated = (await core.Call("settings"))!;
+                if (!JsonNode.DeepEquals(updated["shortcuts"], shortcuts))
+                    throw new Exception("Disabling an extension modified the input shortcut.");
+                if (!(await core.Call("activeShortcuts"))!.AsArray().Any(shortcut => JsonNode.DeepEquals(shortcut, key)))
+                    throw new Exception("Disabling an extension disabled the Sayso input shortcut.");
             }
             finally { await core.Call("updateSettings", original); }
         });
-        foreach (var page in new[] { "general", "models", "extensions", "sayso.wordbook", "sayso.context" })
-            await Check("WinUI page and layout: " + page, async () => { await window.Navigate(page); await Task.Delay(100); window.ValidateLayout(); });
+        var windowSize = window.AppWindow.Size;
+        var presenter = (Microsoft.UI.Windowing.OverlappedPresenter)window.AppWindow.Presenter;
+        window.AppWindow.Resize(new(presenter.PreferredMinimumWidth!.Value, presenter.PreferredMinimumHeight!.Value));
+        try
+        {
+            foreach (var page in new[] { "general", "models", "extensions", "sayso.wordbook", "sayso.context" })
+                await Check("WinUI page and layout at minimum window size: " + page, async () =>
+                {
+                    await window.Navigate(page);
+                    await Task.Delay(100);
+                    window.ValidateLayout();
+                    var feedbackId = page switch { "general" => "UpdateFeedback", "models" => "TranslationTestFeedback", _ => null };
+                    if (feedbackId is null) return;
+                    var feedback = Descendants(window.Content).OfType<Microsoft.UI.Xaml.FrameworkElement>().Single(element =>
+                        Microsoft.UI.Xaml.Automation.AutomationProperties.GetAutomationId(element) == feedbackId);
+                    if (feedback.Visibility != Microsoft.UI.Xaml.Visibility.Collapsed || feedback.DesiredSize.Height > 0)
+                        throw new InvalidOperationException($"Empty feedback reserves layout space in {page}.");
+                });
+        }
+        finally { window.AppWindow.Resize(windowSize); }
         await Check("WASAPI capture and 16 kHz PCM conversion", async () =>
         {
             var received = 0;
@@ -144,6 +156,45 @@ internal static class SmokeTests
             candidate.ValidateCompactNotice();
             await core.Call("dismiss");
         });
+        await Check("Core inserts into the focused Sayso context field and the value persists", async () =>
+        {
+            const string extension = "sayso.context";
+            const string text = "I often use internet slang.";
+            using var clipboard = await ClipboardService.Snapshot();
+            try
+            {
+                window.Show();
+                await window.Navigate(extension);
+                ((Microsoft.UI.Xaml.FrameworkElement)window.Content).UpdateLayout();
+                var field = Descendants(window.Content).OfType<Microsoft.UI.Xaml.Controls.TextBox>().Single(element =>
+                    Microsoft.UI.Xaml.Automation.AutomationProperties.GetName(element) == window.L("默认背景", "Default context"));
+                var tab = Descendants(window.Content).OfType<Microsoft.UI.Xaml.Controls.Button>().Single(button => Equals(button.Tag, extension));
+                if (!field.Focus(Microsoft.UI.Xaml.FocusState.Programmatic)) throw new Exception("The context field could not receive focus.");
+
+                await core.Call("trigger", new JsonObject { ["keyCode"] = 0xA3, ["modifiers"] = 0 });
+                var surface = (await core.Call("session"))!;
+                await core.Call("candidateAction", new JsonObject
+                {
+                    ["surface"] = surface["id"]!.GetValue<string>(), ["source"] = "sayso.app", ["block"] = "status",
+                    ["action"] = new JsonObject { ["type"] = "insert", ["text"] = text }
+                });
+
+                var deadline = DateTime.UtcNow.AddSeconds(3);
+                while (field.Text != text && DateTime.UtcNow < deadline) await Task.Delay(25);
+                if (field.Text != text) throw new Exception("Core did not write into the focused context field.");
+                if (!tab.Focus(Microsoft.UI.Xaml.FocusState.Programmatic)) throw new Exception("The context tab could not receive focus.");
+                while ((await core.Call("appTable", JsonValue.Create(extension)))!["defaultText"]!.GetValue<string>() != text)
+                {
+                    if (DateTime.UtcNow >= deadline) throw new Exception("The inserted context was not saved.");
+                    await Task.Delay(25);
+                }
+            }
+            finally
+            {
+                await core.Call("dismiss");
+                await clipboard.Restore();
+            }
+        });
         await Check("Korean speech uses its locale and reports a missing system voice in the candidate", async () =>
         {
             using var installed = new System.Speech.Synthesis.SpeechSynthesizer();
@@ -165,6 +216,23 @@ internal static class SmokeTests
             candidate.ValidateContentSurface();
             await core.Call("dismiss");
         });
+        await Check("Repeated speech requests can interrupt active playback", () => Task.Run(async () =>
+        {
+            using var voices = new System.Speech.Synthesis.SpeechSynthesizer();
+            var locale = voices.GetInstalledVoices().First(voice => voice.Enabled).VoiceInfo.Culture.Name;
+            const string passage = "A new request can interrupt this sentence while it is still being read aloud.";
+            try
+            {
+                // 每次在上一段仍在播放时请求下一段，覆盖自动朗读后立即点读的路径。
+                platform.Speak(passage, locale, 0.5f);
+                for (var index = 0; index < 5; index++)
+                {
+                    await Task.Delay(120);
+                    platform.Speak(passage, locale, 0.5f);
+                }
+            }
+            finally { platform.Handle("stopSpeaking", null); }
+        }));
         await Check("Candidate dismisses on Enter, outside click and foreground changes without consuming input", async () =>
         {
             try { await CandidateChecks.Dismissal(core, candidate); }

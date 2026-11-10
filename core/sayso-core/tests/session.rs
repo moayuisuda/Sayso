@@ -14,7 +14,7 @@ use sayso_core::protocol::{
     ActionKind, AppInfo, BlockAction, BlockContent, Delivery, EventType, InputSource, Language,
 };
 use sayso_core::session::{SessionState, SurfaceView};
-use sayso_core::settings::{CommandKey, Hotkey, PlatformDefaults, SecretSlot};
+use sayso_core::settings::{Hotkey, PlatformDefaults, SecretSlot};
 use sayso_core::{AppRelease, Core, CoreObserver, Platform, PlatformError, DEFAULT_ROW};
 
 const SPEECH: Hotkey = Hotkey { key_code: 61, modifiers: 0 };
@@ -208,15 +208,16 @@ fn fixture(selection: Option<&str>) -> (tempfile::TempDir, Core, Arc<FakePlatfor
         )],
     );
 
-    // 第三方后处理扩展：没有默认快捷键，由测试设置。
+    // 第三方后处理扩展：按测试需要启用。
     install(
         "glossary",
-        r#"{"schemaVersion":4,"id":"test.glossary","name":"Glossary","main":"main.js","events":["command"],
-            "capabilities":["blocks","publish"],"commands":[{"id":"lookup","title":"Look up"}]}"#,
+        r#"{"schemaVersion":4,"id":"test.glossary","name":"Glossary","main":"main.js","events":["input"],
+            "capabilities":["blocks","publish","insert"]}"#,
         &[(
             "main.js",
-            r#"export function command(event) {
+            r#"export async function input(event) {
                  sayso.blocks.upsert({ id: "gloss", type: "text", runs: [{ text: "释义" }] });
+                 if (event.input.via === "speech") await sayso.insert("第三方处理结果");
                  sayso.publish({ type: "translated", output: "释义", pairs: [{ target: event.input.text, native: "释义" }], card: "gloss" });
                }"#,
         )],
@@ -236,7 +237,7 @@ fn fixture(selection: Option<&str>) -> (tempfile::TempDir, Core, Arc<FakePlatfor
         OPENAI_COMPATIBLE.into(),
         [("baseUrl".into(), format!("http://{}/v1", server.address)), ("model".into(), "local-test".into())].into(),
     );
-    settings.enabled_extensions.extend(["test.echo".into(), "test.glossary".into()]);
+    settings.enabled_extensions.push("test.echo".into());
     core.update_settings(settings).unwrap();
     (data, core, platform, observer, server)
 }
@@ -253,10 +254,6 @@ fn wait_for_surface(core: &Core, condition: impl Fn(&SurfaceView) -> bool) -> Su
         assert!(Instant::now() < deadline, "timed out; last state {:?}", core.session_state());
         std::thread::sleep(Duration::from_millis(20));
     }
-}
-
-fn translate(extension_id: &str) -> CommandKey {
-    CommandKey { extension_id: extension_id.into(), command_id: "translate".into() }
 }
 
 fn block_ids(surface: &SurfaceView, source: &str) -> Vec<String> {
@@ -366,7 +363,7 @@ fn speech_flow_inserts_transcript_into_the_triggering_app() {
     assert_eq!(inserted[0].0, "I have a 苹果.");
     assert_eq!(inserted[0].1.as_ref().and_then(|app| app.id.as_deref()), Some("com.example.notes"));
 
-    // 松开后从「处理中」直接过渡：候选框第一次出现时命令已记为处理中，不会先闪一次空的结果。
+    // 松开后从「处理中」直接过渡：候选框第一次出现时已登记所有订阅者。
     let states = observer.states.lock().unwrap();
     let first = states.iter().find_map(|state| match state {
         SessionState::Presenting { surface } => Some(surface),
@@ -440,15 +437,14 @@ fn closing_or_replacing_a_surface_stops_its_shell() {
             directory.join("extension.json"),
             r#"{
             "schemaVersion":4,"id":"test.shell","name":"Shell","main":"main.js",
-            "events":["command"],"capabilities":["shell"],"timeoutSeconds":10,
-            "commands":[{"id":"run","title":"Run","input":"selection"}]
+            "events":["input"],"capabilities":["shell"],"timeoutSeconds":10
         }"#,
         )
         .unwrap();
         std::fs::write(
             directory.join("main.js"),
             r#"
-            export async function command() {
+            export async function input() {
               await sayso.shell.run("echo started > started.txt; sleep 10; echo late > late.txt");
             }
         "#,
@@ -457,12 +453,12 @@ fn closing_or_replacing_a_surface_stops_its_shell() {
         core.reload_extensions();
         core.set_enabled("test.shell".into(), true).unwrap();
         let key = Hotkey { key_code: 70, modifiers: 1 };
-        core.set_shortcut(CommandKey { extension_id: "test.shell".into(), command_id: "run".into() }, Some(key))
-            .unwrap();
+        core.set_shortcut(InputSource::Selection, Some(key)).unwrap();
         core.trigger(key);
         let surface = wait_for_surface(&core, |surface| surface.working && directory.join("started.txt").exists());
         if replace {
-            core.trigger(SELECTION);
+            core.set_enabled("test.shell".into(), false).unwrap();
+            core.trigger(key);
         } else {
             core.dismiss_surface(surface.id);
         }
@@ -488,21 +484,24 @@ fn closing_or_replacing_a_surface_stops_its_shell() {
     }
 }
 
-/// 按一下模式：录音中再按语音快捷键结束录音，本次仍交给开始录音的命令。
+/// 再按语音键结束录音；同一条识别结果同时投递给两个已启用的订阅者。
 #[test]
 fn toggling_a_speech_shortcut_stops_the_recording() {
-    let (_data, core, _, _, _server) = fixture(Some(""));
+    let (_data, core, platform, _, _server) = fixture(Some(""));
 
-    core.set_shortcut_input(translate("sayso.selection"), InputSource::Speech).unwrap();
     core.toggle(SPEECH);
     assert!(matches!(core.session_state(), SessionState::Recording { command, .. }
         if command == "语音输入"));
+    core.set_enabled("test.glossary".into(), true).unwrap();
     core.push_audio(vec![0; 16000]);
-    core.toggle(SELECTION);
+    core.toggle(SPEECH);
 
-    let surface = wait_for_surface(&core, |surface| !block_ids(surface, "sayso.dictation").is_empty());
+    let surface = wait_for_surface(&core, |surface| !surface.working && !block_ids(surface, "test.glossary").is_empty());
     assert_eq!(status_message(&surface, "test.echo"), "speech: I have a 苹果.");
-    assert!(block_ids(&surface, "sayso.selection").is_empty());
+    assert!(!block_ids(&surface, "sayso.dictation").is_empty());
+    let inserted = platform.inserted.lock().unwrap();
+    assert_eq!(inserted.len(), 2);
+    assert!(inserted.iter().any(|(text, _)| text == "第三方处理结果"));
 }
 
 /// 播放失败应保留原文并提示；自动朗读和按钮共用同一通知，成功重试清除通知。
@@ -628,30 +627,25 @@ fn cancelling_aborts_a_pending_selection_read() {
 }
 
 #[test]
-fn concurrent_shortcut_edits_preserve_both_commands_and_persist() {
+fn concurrent_input_shortcut_edits_persist() {
     let (data, core, _, _, _server) = fixture(Some(""));
     let barrier = std::sync::Barrier::new(2);
-    let speech = translate("sayso.dictation");
-    let selection = translate("sayso.selection");
     let speech_key = Hotkey { key_code: 89, modifiers: 0 };
     let selection_key = Hotkey { key_code: 90, modifiers: 0 };
     std::thread::scope(|scope| {
         scope.spawn(|| {
             barrier.wait();
-            core.set_shortcut(speech.clone(), Some(speech_key)).unwrap();
+            core.set_shortcut(InputSource::Speech, Some(speech_key)).unwrap();
         });
         scope.spawn(|| {
             barrier.wait();
-            core.set_shortcut(selection.clone(), Some(selection_key)).unwrap();
+            core.set_shortcut(InputSource::Selection, Some(selection_key)).unwrap();
         });
     });
 
-    core.set_shortcut_input(speech.clone(), InputSource::Selection).unwrap();
     let settings = core.settings();
-    assert_eq!(settings.shortcut_of(&speech), Some(speech_key));
-    assert_eq!(settings.shortcut_of(&selection), Some(selection_key));
-    assert_eq!(settings.shortcuts[&speech_key].input, InputSource::Selection);
-    assert_eq!(settings.shortcuts[&selection_key].input, InputSource::Selection);
+    assert_eq!(settings.input_for(speech_key), Some(InputSource::Speech));
+    assert_eq!(settings.input_for(selection_key), Some(InputSource::Selection));
     assert_eq!(settings.asr_source, OPENAI_COMPATIBLE);
     let persisted = serde_json::from_slice::<sayso_core::settings::Settings>(
         &std::fs::read(data.path().join("settings.json")).unwrap(),
@@ -677,18 +671,18 @@ fn secrets_persist_to_config_file_and_clear_on_empty() {
     assert!(read().get("llm.openai").is_none());
 }
 
-/// 第三方后处理扩展绑上快捷键后与内置翻译一样：广播的词对由 Sayso 画成词条卡片，生词本照常附加按钮。
+/// 第三方扩展订阅 input 后与内置翻译一样：广播的词对由 Sayso 画成词条卡片，生词本照常附加按钮。
 #[test]
-fn third_party_trigger_publishes_translations_like_built_ins() {
+fn selection_broadcast_reaches_built_in_and_external_extensions() {
     let (_data, core, _, _, _server) = fixture(Some("serendipity"));
-    let lookup = CommandKey { extension_id: "test.glossary".into(), command_id: "lookup".into() };
-    let key = Hotkey { key_code: 50, modifiers: 0 };
-    core.set_shortcut(lookup.clone(), Some(key)).unwrap();
-    core.set_shortcut_input(lookup, InputSource::Selection).unwrap();
-    assert!(core.active_shortcuts().contains(&key));
+    core.set_enabled("test.glossary".into(), true).unwrap();
+    assert!(core.active_shortcuts().contains(&SELECTION));
 
-    core.trigger(key);
+    core.trigger(SELECTION);
     let surface = wait_for_surface(&core, |surface| !surface.working);
+    // 内置互译也收到同一事件；测试环境没有配置翻译模型，因此它报告缺少配置。
+    let error = status_message(&surface, "sayso.app");
+    assert!(error.contains("互译") && error.contains("未配置翻译模型"), "{error}");
     let section = surface.sections.iter().find(|section| section.source_id == "test.glossary").unwrap();
     let card = section.blocks.iter().find(|item| item.block.id == "@term-0").expect("Sayso draws the term card");
     assert_eq!(card.attachments[0].source_id, "sayso.wordbook");
@@ -700,6 +694,7 @@ fn third_party_trigger_publishes_translations_like_built_ins() {
 #[test]
 fn extensions_show_which_hooks_link_them() {
     let (_data, core, _, _, _server) = fixture(None);
+    core.set_enabled("test.glossary".into(), true).unwrap();
     let info = |id: &str| core.extensions().into_iter().find(|info| info.manifest.id == id).unwrap();
     let names = |links: &[sayso_core::extensions::HookLink], event| {
         links.iter().find(|link| link.event == event).map(|link| link.extensions.clone()).unwrap_or_default()

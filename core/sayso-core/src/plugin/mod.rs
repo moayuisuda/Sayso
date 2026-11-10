@@ -55,7 +55,7 @@ pub trait Host: Send + Sync {
     fn apply(&self, instruction: Instruction) -> Result<(), CoreError>;
     /// 用用户配置的翻译模型补全。
     async fn complete(&self, system: String, user: String) -> Result<String, CoreError>;
-    /// 写入触发命令时的前台应用，返回投递方式。
+    /// 写入触发输入时的前台应用，返回投递方式。
     async fn insert(&self, text: String) -> Result<Delivery, CoreError>;
     /// 读取本插件的某个数据集合。
     fn records(&self, collection: &str) -> Result<Vec<StoreRecord>, CoreError>;

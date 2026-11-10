@@ -18,7 +18,7 @@ internal sealed partial class SettingsWindow : Window
     private readonly StackPanel tabs = new() { Orientation = Orientation.Horizontal, Spacing = 4, HorizontalAlignment = HorizontalAlignment.Center };
     private readonly ContentControl page = new() { HorizontalContentAlignment = HorizontalAlignment.Stretch, VerticalContentAlignment = VerticalAlignment.Stretch };
     private readonly TextBlock title = Controls.Text("通用", 13);
-    private readonly TextBlock status = Controls.Text("", 11, 0.6);
+    private readonly TextBlock status = Controls.OptionalText(size: 11, opacity: 0.6);
     private JsonArray extensions = [];
     private JsonArray languages = [];
     private JsonArray asrSources = [];
@@ -48,21 +48,28 @@ internal sealed partial class SettingsWindow : Window
             presenter.PreferredMinimumHeight = (int)(520 * scale);
         }
         root.RowDefinitions.Add(new() { Height = new(34) });
-        root.RowDefinitions.Add(new() { Height = new(64) });
+        root.RowDefinitions.Add(new() { Height = GridLength.Auto });
         root.RowDefinitions.Add(new() { Height = new(1) });
         root.RowDefinitions.Add(new() { Height = new(1, GridUnitType.Star) });
-        root.RowDefinitions.Add(new() { Height = new(30) });
+        root.RowDefinitions.Add(new() { Height = GridLength.Auto });
         var drag = new Grid();
         title.HorizontalAlignment = HorizontalAlignment.Center;
         title.FontWeight = Microsoft.UI.Text.FontWeights.SemiBold;
         drag.Children.Add(title);
         root.Children.Add(drag);
         SetTitleBar(drag);
-        Grid.SetRow(tabs, 1); root.Children.Add(tabs);
+        tabs.Margin = new(12, 5, 12, 7);
+        var navigation = new ScrollViewer
+        {
+            Content = tabs, HorizontalContentAlignment = HorizontalAlignment.Center,
+            HorizontalScrollMode = ScrollMode.Enabled, HorizontalScrollBarVisibility = ScrollBarVisibility.Auto,
+            VerticalScrollMode = ScrollMode.Disabled, VerticalScrollBarVisibility = ScrollBarVisibility.Disabled
+        };
+        Grid.SetRow(navigation, 1); root.Children.Add(navigation);
         var line = new Border { Background = Controls.Brush("SaysoLine") };
         Grid.SetRow(line, 2); root.Children.Add(line);
         Grid.SetRow(page, 3); root.Children.Add(page);
-        status.Margin = new(20, 0, 20, 0);
+        status.Margin = new(24, 5, 24, 7);
         Grid.SetRow(status, 4); root.Children.Add(status);
         Content = root;
         AppWindow.Closing += (_, e) => { e.Cancel = true; AppWindow.Hide(); };
@@ -139,9 +146,9 @@ internal sealed partial class SettingsWindow : Window
     internal async Task ReloadExtensions()
     {
         extensions = (await core!.Call("extensions"))!.AsArray();
-        await UpdateActiveShortcuts();
         BuildTabs();
-        if (selected == "extensions" || selected.StartsWith("sayso.") || extensions.Any(e => e!["manifest"]!["id"]!.GetValue<string>() == selected)) await Navigate(selected);
+        if (selected == "extensions" || selected.StartsWith("sayso.") ||
+            extensions.Any(e => e!["manifest"]!["id"]!.GetValue<string>() == selected)) await Navigate(selected);
     }
 
     /// 后台检查发现新版本，刷新通用页的版本行。
@@ -178,15 +185,19 @@ internal sealed partial class SettingsWindow : Window
             ("extensions", L("扩展", "Extensions"), "\uEA86")
         };
         items.AddRange(extensions.Where(e => e!["enabled"]!.GetValue<bool>() && e["manifest"]!["tab"] is not null)
-            .Select(e => (e!["manifest"]!["id"]!.GetValue<string>(), e["manifest"]!["tab"]!["title"]!.GetValue<string>(), "\uE8F1")));
+            .Select(e => (e!["manifest"]!["id"]!.GetValue<string>(), e["manifest"]!["tab"]!["title"]!.GetValue<string>(),
+                e["manifest"]!["tab"]!["appTable"] is null ? "\uE8F1" : "\uE7F4")));
         if (!items.Any(i => i.Id == selected)) selected = "general";
         foreach (var item in items)
         {
-            var icon = new FontIcon { Glyph = item.Glyph, FontSize = 17 };
-            var text = Controls.Text(item.Title, 11);
-            text.HorizontalAlignment = HorizontalAlignment.Center;
-            var content = Controls.Stack(icon, text); content.Spacing = 4;
-            var button = new Button { Content = content, MinWidth = 76, Height = 50, Padding = new(8, 5, 8, 5), CornerRadius = new(8), BorderThickness = new(0), Tag = item.Id };
+            var icon = new FontIcon { Glyph = item.Glyph, FontSize = 15, VerticalAlignment = VerticalAlignment.Center };
+            var text = Controls.Text(item.Title, 12);
+            text.MaxWidth = 160;
+            text.TextWrapping = TextWrapping.NoWrap;
+            text.TextTrimming = TextTrimming.CharacterEllipsis;
+            var content = Controls.Horizontal(icon, text);
+            var button = new Button { Content = content, MinHeight = 38, Padding = new(12, 6, 12, 6), CornerRadius = new(8), BorderThickness = new(0), Tag = item.Id };
+            ToolTipService.SetToolTip(button, item.Title);
             Microsoft.UI.Xaml.Automation.AutomationProperties.SetName(button, item.Title);
             button.Click += (_, _) => Run(() => Navigate(item.Id));
             tabs.Children.Add(button);

@@ -41,7 +41,7 @@
 | 触发划词 | <kbd>Option</kbd> + <kbd>T</kbd> | <kbd>Ctrl</kbd> + <kbd>T</kbd> |
 | 取消 / 关闭结果框 | <kbd>Esc</kbd> | <kbd>Esc</kbd> |
 
-每个命令的快捷键与触发方式（按住说话 / 按一下开始）均可在「设置 → 通用 → 快捷键」中修改。
+在「设置 → 通用 → 快捷键」修改语音和划词按键及语音触发方式。
 
 - **语音输入**：松开按键后写入当前输入框。译文在候选框中高亮并自动朗读一次，点击词条可重听。
 - **划词翻译**：在任意应用中选中文字后触发，在目标语言与本地语言之间互译。
@@ -92,7 +92,7 @@ flowchart LR
 
 ## 扩展
 
-扩展分两种，内置扩展与第三方扩展都可以是任一种。**后处理扩展**（如混说翻译、互译）提供命令，由用户在「设置 → 通用 → 快捷键」中设置的快捷键触发，对 Sayso 准备好的输入（语音识别结果或选中的文本）做后处理，并在输入就绪（`input`）、翻译完毕（`translated`）、写入完成（`inserted`）等环节广播 hook，切换前台应用时也广播 `focus`；一个快捷键只触发一个命令。**事件式扩展**（如生词本）订阅这些 hook，往候选框里加内容和按钮，或在整句卡片、词条卡片上附加自己的按钮，用户点击后再回调扩展处理。
+语音识别和划词完成后，Sayso 向所有已启用的订阅者广播同一个 `input` 事件。内置混说翻译、互译与第三方扩展用同样的事件获取文本，可按 `event.input.via` 区分语音和划词。扩展还可订阅 `translated`、`inserted` 或 `focus`，例如生词本在翻译后给词条卡片加按钮。
 
 扩展需声明所用能力（`blocks` / `store` / `insert` / `llm` / `publish` / `fs` / `context` / `shell`），第三方扩展启用前由用户确认。
 `shell` 提供 macOS 与 Windows 共用的脚本执行能力，支持管道、重定向和内置命令，可调用本机安装的程序。
@@ -100,10 +100,19 @@ flowchart LR
 | 示例 | 作用 |
 | --- | --- |
 | [`favorites`](examples/extensions/favorites) | 为翻译出的单词显示收藏按钮，单独页签管理 |
+| [`dictation-words`](examples/dictation-words) | 订阅语音输入，写入整句，把翻译片段拆成带释义的词条 |
 | [`explain`](examples/extensions/explain) | 翻译完成后在整句卡片上附加「讲解语法」按钮，用已配置的模型讲解这句外语 |
 | [`obsidian`](examples/extensions/obsidian) | 在整句卡片与每张词条卡片上附加「记到 Obsidian」按钮，把整次翻译或单个词条写成卡片，追加到当天的笔记 |
 
 将扩展文件夹放入扩展目录（macOS：`~/Library/Application Support/Sayso/Extensions/`，Windows：`%LOCALAPPDATA%\Sayso\Extensions\`），在「设置 → 扩展」中重新加载并启用。扩展也可导出为 `.sayso` 文件，双击即可安装。协议与 API 见 [扩展协议](docs/extension-protocol.md)。
+
+要试用拆词版，先运行 `python scripts/package-dictation-words.py`，再安装生成的 `build/extensions/dictation-words.sayso`。在「设置 → 扩展」启用「混说翻译 · 拆词」并停用原版「混说翻译」，即可继续使用原来的语音快捷键。两个扩展都启用时，都会处理语音。
+
+### 用自己的 Agent 编写扩展
+
+克隆本仓库，把 [Sayso 扩展开发技能](skills/sayso-extension/SKILL.md) 交给你的代码 Agent。可以让 Agent 直接读取 `skills/sayso-extension/SKILL.md`，也可以用它支持的方式加载 `sayso-extension`。在独立项目中开发时，一并提供 Sayso 仓库路径和扩展输出目录。
+
+> 读取 `skills/sayso-extension/SKILL.md`，帮我写一个 Sayso 扩展。划词后在候选框显示选中文字的字符数。把扩展输出到 `./selection-count/`，并告诉我怎么在 Sayso 里验证和导出。
 
 ## 安装
 

@@ -27,9 +27,8 @@ Windows 宿主通过 `sayso-windows-bridge` 的窄 C ABI 调用相同的 `Core`�
 `CoreClient` 串行执行普通调用，在工作线程进入原生边界；设置修改在同一事务内从核心读取最新值再更新，
 避免连续修改多个控件时覆盖旧快照。UI 持有的设置仅用于渲染。
 
-快捷键编辑通过 `Core::set_shortcut` 与 `Core::set_shortcut_input` 提交意图，Swift 的 UniFFI 绑定与 Windows 桥接共用这些接口。
-设置以快捷键为键保存（一个快捷键只对应一个命令），改键时保留输入来源、占用其他命令的快捷键时从原命令移走，都由 `settings` 模块统一实现；
-Core 在设置锁内完成修改与落盘，释放锁后通知宿主。宿主只采集按键、展示快捷键并传入平台键码。
+`Core::set_shortcut` 设置语音或划词的入口。文本就绪后，Core 将 `input` 广播给所有已启用的订阅者。
+Swift 的 UniFFI 绑定与 Windows 桥接共用这些接口。Core 在设置锁内完成修改与落盘，释放锁后通知宿主。
 
 ## 系统适配
 

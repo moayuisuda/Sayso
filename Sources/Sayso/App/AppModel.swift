@@ -73,11 +73,10 @@ final class AppModel {
         }
     }
 
-    /// 快捷键或扩展启停变化时同步到监听器：只监听触发已启用命令的快捷键。
+    /// 将 Sayso 的输入快捷键同步到监听器。
     private func syncHotkeysWithSettings() {
         withObservationTracking {
             hotkeys.style = model.settings.hotkeyStyle
-            _ = model.extensions
             hotkeys.shortcuts = Set(model.core.activeShortcuts())
         } onChange: { [weak self] in
             Task { @MainActor in self?.syncHotkeysWithSettings() }

@@ -6,8 +6,8 @@ const chinese = native.code === "zh";
 /** 面向词句阅读，超长文本不在候选框里展示，也避免一次请求过慢。 */
 const MAX_LENGTH = 2000;
 
-export async function command(event) {
-  if (event.command.id !== "translate") return;
+export async function input(event) {
+  if (event.input.via !== "selection") return;
   const text = event.input.text;
   if ([...text].length > MAX_LENGTH) {
     throw new Error(chinese ? `文字超过 ${MAX_LENGTH} 个字符` : `Text exceeds ${MAX_LENGTH} characters`);

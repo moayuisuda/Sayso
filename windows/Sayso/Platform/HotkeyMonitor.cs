@@ -6,7 +6,7 @@ namespace Sayso.Platform;
 
 /// <summary>
 /// 低级键盘钩子只收集事件，业务异步串行交给 CoreClient，避免超过系统钩子超时。
-/// 每个命令有自己的快捷键：单修饰键（如右 Ctrl）或「修饰键 + 普通键」组合（如 Ctrl+T）。
+/// 语音和划词有各自的快捷键：单修饰键（如右 Ctrl）或「修饰键 + 普通键」组合（如 Ctrl+T）。
 /// 按住模式下按下发 trigger、松开发 stop；按一下模式下按下发 toggle。
 /// </summary>
 internal sealed class HotkeyMonitor : IDisposable
@@ -23,7 +23,7 @@ internal sealed class HotkeyMonitor : IDisposable
     /// <summary>录制中按下、尚未松开的修饰键：单独松开即录为单修饰键快捷键。</summary>
     private uint? recordingModifier;
     public JsonNode Settings { get; set; } = null!;
-    /// <summary>触发已启用命令的快捷键。</summary>
+    /// <summary>已配置的输入快捷键。</summary>
     public IReadOnlySet<(uint Key, ulong Modifiers)> ActiveShortcuts { get; set; } = new HashSet<(uint, ulong)>();
     public bool IsRecordingKey { get; set; }
     public Action<uint, ulong>? KeyRecorded { get; set; }

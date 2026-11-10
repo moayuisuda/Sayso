@@ -301,8 +301,8 @@ impl Invocation {
             return self.warn(CoreError::CapabilityNotGranted(missing).to_string());
         }
         // 广播只在处理命令时允许：处理广播事件时不能再广播，避免循环。
-        if matches!(instruction, Instruction::PublishTranslated { .. }) && self.event_type != EventType::Command {
-            return self.warn("publish is only allowed while handling the command event".into());
+        if matches!(instruction, Instruction::PublishTranslated { .. }) && self.event_type != EventType::Input {
+            return self.warn("publish is only allowed while handling the input event".into());
         }
         if let Err(error) = self.host.apply(instruction) {
             self.warn(error.to_string());
@@ -317,8 +317,8 @@ impl Invocation {
     /// 写入其他应用必须由用户触发：只能在处理命令时使用。
     async fn insert(&self, text: String) -> Result<String, CoreError> {
         self.require(Capability::Insert)?;
-        if self.event_type != EventType::Command {
-            return Err(CoreError::InsertOutsideCommand);
+        if self.event_type != EventType::Input {
+            return Err(CoreError::InsertOutsideInput);
         }
         Ok(match self.host.insert(text).await? {
             Delivery::Inserted => "inserted",

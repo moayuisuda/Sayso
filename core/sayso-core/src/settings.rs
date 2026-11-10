@@ -30,18 +30,11 @@ pub enum HotkeyStyle {
     Toggle,
 }
 
-/// 扩展命令的唯一标识：扩展 id + 命令 id。
-#[derive(Clone, Debug, PartialEq, Eq, Hash, Serialize, Deserialize, uniffi::Record)]
+/// Sayso 输入入口的按键。
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize, uniffi::Record)]
 #[serde(rename_all = "camelCase")]
-pub struct CommandKey {
-    pub extension_id: String,
-    pub command_id: String,
-}
-
-/// 快捷键触发的命令及命令收到的输入来源。
-#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, uniffi::Record)]
-pub struct Shortcut {
-    pub command: CommandKey,
+pub struct InputShortcut {
+    pub key: Hotkey,
     pub input: InputSource,
 }
 
@@ -62,9 +55,7 @@ pub struct Settings {
     pub target_language: Language,
     pub native_language: Language,
     pub hotkey_style: HotkeyStyle,
-    /// 以快捷键为键：一个快捷键只触发一个命令；一个命令也只有一个快捷键，没有快捷键的命令不会被触发。
-    #[serde(with = "shortcut_entries")]
-    pub shortcuts: HashMap<Hotkey, Shortcut>,
+    pub shortcuts: Vec<InputShortcut>,
     /// 扩展输出朗读指令时自动朗读。
     pub auto_speak: bool,
     pub speech_rate: f32,
@@ -87,22 +78,14 @@ pub const APP_CONTEXT_ID: &str = "sayso.context";
 impl Settings {
     pub fn defaults(platform: PlatformDefaults) -> Self {
         let llm = LlmProvider::Openai;
-        let translate =
-            |extension_id: &str| CommandKey { extension_id: extension_id.into(), command_id: "translate".into() };
         Settings {
             target_language: Language::English,
             native_language: Language::Chinese,
             hotkey_style: HotkeyStyle::Hold,
-            shortcuts: HashMap::from([
-                (
-                    platform.speech_shortcut,
-                    Shortcut { command: translate(SPEECH_TRANSLATE_ID), input: InputSource::Speech },
-                ),
-                (
-                    platform.selection_shortcut,
-                    Shortcut { command: translate(SELECTION_TRANSLATE_ID), input: InputSource::Selection },
-                ),
-            ]),
+            shortcuts: vec![
+                InputShortcut { key: platform.speech_shortcut, input: InputSource::Speech },
+                InputShortcut { key: platform.selection_shortcut, input: InputSource::Selection },
+            ],
             auto_speak: true,
             speech_rate: platform.speech_rate,
             asr_source: source::VOLCENGINE.into(),
@@ -124,25 +107,14 @@ impl Settings {
         LanguagePair { target: self.target_language, native: self.native_language }
     }
 
-    /// 命令的快捷键。
-    pub fn shortcut_of(&self, command: &CommandKey) -> Option<Hotkey> {
-        self.shortcuts.iter().find(|(_, shortcut)| &shortcut.command == command).map(|(key, _)| *key)
+    pub fn input_for(&self, key: Hotkey) -> Option<InputSource> {
+        self.shortcuts.iter().find(|shortcut| shortcut.key == key).map(|shortcut| shortcut.input)
     }
 
-    /// 设置命令的快捷键，`None` 为移除。快捷键已属于其他命令时从那个命令上移走；
-    /// 命令有固定的输入来源（`fixed`）时用它；否则改键时保留原输入来源，首次设置为语音。
-    pub fn set_shortcut(&mut self, command: CommandKey, key: Option<Hotkey>, fixed: Option<InputSource>) {
-        let previous = self.shortcut_of(&command).and_then(|key| self.shortcuts.remove(&key));
+    pub fn set_shortcut(&mut self, input: InputSource, key: Option<Hotkey>) {
+        self.shortcuts.retain(|shortcut| shortcut.input != input && Some(shortcut.key) != key);
         if let Some(key) = key {
-            let input = fixed.or(previous.map(|shortcut| shortcut.input)).unwrap_or(InputSource::Speech);
-            self.shortcuts.insert(key, Shortcut { command, input });
-        }
-    }
-
-    /// 修改命令快捷键的输入来源；命令没有快捷键时不变。
-    pub fn set_shortcut_input(&mut self, command: &CommandKey, input: InputSource) {
-        if let Some(shortcut) = self.shortcuts.values_mut().find(|shortcut| &shortcut.command == command) {
-            shortcut.input = input;
+            self.shortcuts.push(InputShortcut { key, input });
         }
     }
 
@@ -153,38 +125,6 @@ impl Settings {
             self.llm_model = self.llm_provider.default_model().into();
         }
         self
-    }
-}
-
-/// 快捷键表在 JSON 中存为 `[{ key, command, input }]`：JSON 对象的键只能是字符串。
-mod shortcut_entries {
-    use std::collections::HashMap;
-
-    use serde::{Deserialize, Deserializer, Serialize, Serializer};
-
-    use super::{CommandKey, Hotkey, InputSource, Shortcut};
-
-    #[derive(Serialize, Deserialize)]
-    struct Entry {
-        key: Hotkey,
-        command: CommandKey,
-        input: InputSource,
-    }
-
-    pub fn serialize<S: Serializer>(shortcuts: &HashMap<Hotkey, Shortcut>, serializer: S) -> Result<S::Ok, S::Error> {
-        let entries: Vec<Entry> = shortcuts
-            .iter()
-            .map(|(key, shortcut)| Entry { key: *key, command: shortcut.command.clone(), input: shortcut.input })
-            .collect();
-        entries.serialize(serializer)
-    }
-
-    pub fn deserialize<'de, D: Deserializer<'de>>(deserializer: D) -> Result<HashMap<Hotkey, Shortcut>, D::Error> {
-        let entries = Vec::<Entry>::deserialize(deserializer)?;
-        Ok(entries
-            .into_iter()
-            .map(|entry| (entry.key, Shortcut { command: entry.command, input: entry.input }))
-            .collect())
     }
 }
 
@@ -292,10 +232,6 @@ mod tests {
         })
     }
 
-    fn translate(extension: &str) -> CommandKey {
-        CommandKey { extension_id: extension.into(), command_id: "translate".into() }
-    }
-
     #[test]
     fn normalizing_resets_llm_defaults() {
         let previous = defaults();
@@ -309,45 +245,18 @@ mod tests {
     }
 
     #[test]
-    fn a_shortcut_moves_to_the_command_that_takes_it_and_keeps_input_on_rekey() {
+    fn moving_an_input_shortcut_reassigns_its_source() {
         let mut settings = defaults();
-        let speech = translate(SPEECH_TRANSLATE_ID);
-        let selection = translate(SELECTION_TRANSLATE_ID);
-
-        // 改键：保留原输入来源，重复提交不变。
-        let other = Hotkey { key_code: 89, modifiers: 0x80000 };
-        settings.set_shortcut(selection.clone(), Some(other), None);
-        assert_eq!(settings.shortcuts[&other].input, InputSource::Selection);
-        let rekeyed = settings.clone();
-        settings.set_shortcut(selection.clone(), Some(other), None);
-        assert_eq!(settings, rekeyed);
-
-        // 占用其他命令的快捷键：原命令失去快捷键。
-        let speech_key = settings.shortcut_of(&speech).unwrap();
-        settings.set_shortcut(selection.clone(), Some(speech_key), None);
-        assert_eq!(settings.shortcuts[&speech_key].command, selection);
-        assert_eq!(settings.shortcut_of(&speech), None);
-        assert_eq!(settings.shortcuts.len(), 1);
-
-        // 首次设置为语音；移除后命令没有快捷键。
-        settings.set_shortcut(speech.clone(), Some(other), None);
-        assert_eq!(settings.shortcuts[&other].input, InputSource::Speech);
-        settings.set_shortcut_input(&speech, InputSource::Selection);
-        assert_eq!(settings.shortcuts[&other].input, InputSource::Selection);
-
-        // 命令有固定的输入来源时以它为准。
-        settings.set_shortcut(speech.clone(), Some(other), Some(InputSource::Speech));
-        assert_eq!(settings.shortcuts[&other].input, InputSource::Speech);
-        settings.set_shortcut(speech.clone(), None, None);
-        assert_eq!(settings.shortcut_of(&speech), None);
-        assert_eq!(settings.shortcuts.len(), 1);
+        let key = settings.shortcuts[0].key;
+        settings.set_shortcut(InputSource::Selection, Some(key));
+        assert_eq!(settings.shortcuts, [InputShortcut { key, input: InputSource::Selection }]);
     }
 
     #[test]
     fn shortcuts_round_trip_through_json() {
         let settings = defaults();
         let json = serde_json::to_value(&settings).unwrap();
-        assert!(json["shortcuts"].as_array().unwrap().iter().any(|entry| entry["key"]["keyCode"] == 61));
+        assert!(json["shortcuts"][0]["key"]["keyCode"] == 61);
         assert_eq!(serde_json::from_value::<Settings>(json).unwrap(), settings);
     }
 }

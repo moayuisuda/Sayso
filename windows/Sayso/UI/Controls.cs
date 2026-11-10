@@ -7,7 +7,7 @@ using Windows.UI;
 
 namespace Sayso.UI;
 
-/// <summary>与 SwiftUI Theme 对齐的公共控件：10px 卡片、8px 行、6px 控件与 Indigo 强调色。</summary>
+/// <summary>候选框和设置页共用的 WinUI 控件与主题。</summary>
 internal static class Controls
 {
     public static SolidColorBrush Accent => (SolidColorBrush)Application.Current.Resources["SaysoAccent"];
@@ -40,9 +40,18 @@ internal static class Controls
     {
         Text = text, FontSize = size, Opacity = opacity, TextWrapping = TextWrapping.Wrap, VerticalAlignment = VerticalAlignment.Center
     };
-    public static StackPanel Stack(params UIElement[] children)
+    public static TextBlock OptionalText(string text = "", double size = 12, double opacity = 1)
     {
-        var panel = new StackPanel { Spacing = 14 };
+        var label = Text(text, size, opacity);
+        static void UpdateVisibility(TextBlock element) => element.Visibility = string.IsNullOrWhiteSpace(element.Text) ? Visibility.Collapsed : Visibility.Visible;
+        label.RegisterPropertyChangedCallback(TextBlock.TextProperty, static (sender, _) => UpdateVisibility((TextBlock)sender));
+        UpdateVisibility(label);
+        return label;
+    }
+    public static StackPanel Stack(params UIElement[] children) => Stack(14, children);
+    public static StackPanel Stack(double spacing, params UIElement[] children)
+    {
+        var panel = new StackPanel { Spacing = spacing };
         foreach (var child in children) panel.Children.Add(child);
         return panel;
     }
@@ -53,36 +62,47 @@ internal static class Controls
         panel.Spacing = 8;
         return panel;
     }
+    public static WrapPanel Wrap(params UIElement[] children)
+    {
+        var panel = new WrapPanel();
+        foreach (var child in children) panel.Children.Add(child);
+        return panel;
+    }
     public static Border Card(params UIElement[] children) => new()
     {
         Background = Brush("SaysoCard"), BorderBrush = Brush("SaysoLine"), BorderThickness = new(1),
-        CornerRadius = new(10), Padding = new(16), Child = Stack(children)
+        CornerRadius = new(10), Padding = new(14), Child = Stack(12, children)
     };
     public static UIElement Section(string title, params UIElement[] children)
     {
-        var heading = Text(title, 12, 0.65);
+        var heading = Text(title, 12, 0.76);
         heading.FontWeight = Microsoft.UI.Text.FontWeights.SemiBold;
         heading.Margin = new(4, 0, 0, 0);
-        var panel = Stack(heading, Card(children));
-        panel.Spacing = 8;
-        return panel;
+        return Stack(6, heading, Card(children));
     }
-    public static UIElement Row(string title, UIElement control, string? caption = null)
+    public static UIElement Row(string title, FrameworkElement control, string? caption = null)
     {
-        var grid = new Grid { ColumnSpacing = 16 };
-        grid.ColumnDefinitions.Add(new() { Width = new(134) });
+        var grid = new Grid { ColumnSpacing = 14 };
+        grid.ColumnDefinitions.Add(new() { Width = new(112) });
         grid.ColumnDefinitions.Add(new() { Width = new(1, GridUnitType.Star) });
-        var label = Text(title);
-        label.HorizontalAlignment = HorizontalAlignment.Right;
-        label.VerticalAlignment = VerticalAlignment.Top;
-        label.Margin = new(0, 7, 0, 0);
-        var content = Stack(control);
-        content.Spacing = 6;
-        if (!string.IsNullOrEmpty(caption)) content.Children.Add(Text(caption, 11, 0.62));
-        Grid.SetColumn(content, 1);
-        grid.Children.Add(label);
-        grid.Children.Add(content);
-        if (control is FrameworkElement element) AutomationProperties.SetName(element, title);
+        grid.RowDefinitions.Add(new() { Height = GridLength.Auto });
+        Grid.SetColumn(control, 1);
+        grid.Children.Add(control);
+        if (!string.IsNullOrWhiteSpace(title))
+        {
+            grid.Children.Add(Text(title));
+            AutomationProperties.SetName(control, title);
+        }
+        if (!string.IsNullOrWhiteSpace(caption))
+        {
+            // 说明独占第二行，标签与控件居中对齐，说明换行也不会改变对齐位置。
+            grid.RowDefinitions.Add(new() { Height = GridLength.Auto });
+            var hint = Text(caption, 12, 0.66);
+            hint.Margin = new(0, 5, 0, 0);
+            Grid.SetRow(hint, 1);
+            Grid.SetColumn(hint, 1);
+            grid.Children.Add(hint);
+        }
         return grid;
     }
     public static Button Button(string label, Action action)
@@ -126,23 +146,22 @@ internal static class Controls
     }
     public static TextBox Field(string value, Action<string> changed, string placeholder = "")
     {
-        var field = new TextBox { Text = value, PlaceholderText = placeholder, Width = 300, HorizontalAlignment = HorizontalAlignment.Left, FontSize = 13 };
+        var field = new TextBox { Text = value, PlaceholderText = placeholder, FontSize = 13 };
         field.LostFocus += (_, _) => { if (field.Text != value) { value = field.Text; changed(value); } };
         return field;
     }
     public static PasswordBox Secret(string value, Action<string> changed)
     {
-        var field = new PasswordBox { Password = value, Width = 300, HorizontalAlignment = HorizontalAlignment.Left, FontSize = 13 };
+        var field = new PasswordBox { Password = value, FontSize = 13 };
         field.LostFocus += (_, _) => { if (field.Password != value) { value = field.Password; changed(value); } };
         return field;
     }
     public static ScrollViewer Page(params UIElement[] sections)
     {
-        var panel = Stack(sections);
-        panel.Spacing = 24;
-        panel.MaxWidth = 600;
+        var panel = Stack(18, sections);
+        panel.MaxWidth = 640;
         panel.HorizontalAlignment = HorizontalAlignment.Stretch;
-        var host = new Grid { Padding = new(32, 28, 32, 28) };
+        var host = new Grid { Padding = new(24, 18, 24, 20) };
         host.Children.Add(panel);
         return new ScrollViewer
         {

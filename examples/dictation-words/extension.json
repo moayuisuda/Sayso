@@ -1,0 +1,10 @@
+{
+  "schemaVersion": 4,
+  "id": "com.sayso.example.dictation-words",
+  "name": "混说翻译 · 拆词 / Mixed-language Translation with Words",
+  "description": "处理语音识别文本，写入整句并把翻译或修正的片段拆成单词卡片 / Processes recognized speech and shows individual vocabulary cards for translated or corrected spans",
+  "main": "main.js",
+  "timeoutSeconds": 40,
+  "events": ["input"],
+  "capabilities": ["blocks", "publish", "insert", "llm"]
+}

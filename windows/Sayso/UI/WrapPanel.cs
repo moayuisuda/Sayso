@@ -40,6 +40,7 @@ internal sealed class WrapPanel : Panel
         var rows = new List<(List<UIElement> Children, double Width, double Height)>();
         foreach (var child in Children)
         {
+            if (child.Visibility == Visibility.Collapsed) continue;
             var size = child.DesiredSize;
             if (rows.Count == 0 || rows[^1].Width + Gap + size.Width > maxWidth)
             {

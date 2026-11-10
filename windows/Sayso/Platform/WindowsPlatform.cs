@@ -32,12 +32,12 @@ internal sealed class WindowsPlatform(DispatcherQueue dispatcher) : IDisposable
             case "stopAudio": audio?.Stop(); return null;
             case "frontmostApp":
                 var window = NativeMethods.GetForegroundWindow();
-                NativeMethods.GetWindowThreadProcessId(window, out var process);
-                if (process == Environment.ProcessId || window == 0) return null;
-                return new JsonObject { ["id"] = window.ToInt64().ToString(), ["name"] = Process.GetProcessById((int)process).ProcessName };
+                if (window == 0 || NativeMethods.GetWindowThreadProcessId(window, out var process) == 0) return null;
+                // 写入目标也可以是 Sayso 设置窗口。应用列表和焦点广播各自排除 Sayso。
+                using (var target = Process.GetProcessById((int)process))
+                    return new JsonObject { ["id"] = window.ToInt64().ToString(), ["name"] = target.ProcessName };
             case "runningApps":
-                var running = Process.GetProcesses().Where(p => p.Id != Environment.ProcessId && p.MainWindowHandle != 0).Select(p => p.ProcessName).Distinct();
-                return new JsonArray(running.Select(name => (JsonNode)CreateAppInfo(name)).ToArray());
+                return new JsonArray(RunningApplications.Names().Select(name => (JsonNode)CreateAppInfo(name)).ToArray());
             case "copyText": return OnUI(async () => { await ClipboardService.Copy(args!.GetValue<string>()); return null; }).GetAwaiter().GetResult();
             case "openUrl": Open(args!.GetValue<string>()); return null;
             case "speak":
@@ -113,7 +113,7 @@ internal sealed class WindowsPlatform(DispatcherQueue dispatcher) : IDisposable
             if (voice is null) throw new InvalidOperationException($"Windows 未安装 {locale} 朗读语音。请在「设置 → 时间和语言 → 语音 → 添加语音」安装对应语音，完成后重启 Sayso。");
             speech.SelectVoice(voice.VoiceInfo.Name);
             speech.Rate = (int)Math.Clamp((rate - 0.5f) * 20, -10, 10);
-            speech.SetOutputToDefaultAudioDevice();
+            // 合成器已使用默认输出，取消上一段后可能仍处于 Speaking，此时不能重设输出。
             speech.SpeakAsync(text);
         }
     }

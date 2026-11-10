@@ -1,6 +1,5 @@
 //! 一次候选框的内容：按来源分组的块、其他扩展附加在块上的按钮，以及决定何时自动隐藏的停留规则。
 
-use std::collections::HashSet;
 use std::time::{Duration, Instant};
 
 use serde::Serialize;
@@ -81,7 +80,7 @@ pub(crate) struct Surface {
     /// 整句卡片的引用（`来源 id/块 id`）：附加在它们上面的按钮显示在底部操作栏。
     translation_cards: Vec<String>,
     /// 仍在处理本次事件的扩展。
-    running: HashSet<String>,
+    running: usize,
     /// 发送端只由本候选框持有，关闭或替换候选框后，shell 的接收端立即得到关闭通知。
     shell_lifetime: tokio::sync::watch::Sender<()>,
     /// 最近一次内容变化的时间，用于决定何时自动隐藏。
@@ -97,7 +96,7 @@ impl Surface {
             placeholder,
             sections: Vec::new(),
             translation_cards: Vec::new(),
-            running: HashSet::new(),
+            running: 0,
             shell_lifetime: tokio::sync::watch::channel(()).0,
             last_change: Instant::now(),
             hold,
@@ -218,12 +217,12 @@ impl Surface {
             .collect()
     }
 
-    pub fn mark_running(&mut self, extension_ids: impl IntoIterator<Item = String>) {
-        self.running.extend(extension_ids);
+    pub fn mark_running(&mut self, count: usize) {
+        self.running += count;
     }
 
-    pub fn mark_finished(&mut self, extension_id: &str) {
-        self.running.remove(extension_id);
+    pub fn mark_finished(&mut self) {
+        self.running -= 1;
         self.touch();
     }
 
@@ -263,7 +262,7 @@ impl Surface {
             placeholder: self.placeholder.clone(),
             sections,
             footer,
-            working: !self.running.is_empty(),
+            working: self.running != 0,
         }
     }
 
@@ -284,7 +283,7 @@ impl Surface {
 
     /// 没有悬停、没有扩展在处理，且内容静止超过停留时长时自动隐藏。
     pub fn should_dismiss(&self, hovering: bool, now: Instant) -> bool {
-        !hovering && self.running.is_empty() && now.duration_since(self.last_change) >= self.required_hold()
+        !hovering && self.running == 0 && now.duration_since(self.last_change) >= self.required_hold()
     }
 }
 
@@ -337,9 +336,11 @@ mod tests {
         assert!(surface.should_dismiss(false, later(2)));
         assert!(!surface.should_dismiss(true, later(2)));
 
-        surface.mark_running(["ext.one".to_string()]);
+        surface.mark_running(2);
         assert!(!surface.should_dismiss(false, later(60)));
-        surface.mark_finished("ext.one");
+        surface.mark_finished();
+        assert!(!surface.should_dismiss(false, later(60)));
+        surface.mark_finished();
 
         surface.upsert(status("b", vec![invoke("Add")]), "ext.one", None);
         assert!(!surface.should_dismiss(false, later(10)));

@@ -4,7 +4,7 @@ use sayso_core::error::CoreError;
 use sayso_core::llm::Endpoint;
 use sayso_core::plugin::{built_in_plugins, run, Host, Instruction, RunStatus};
 use sayso_core::protocol::{
-    BlockContent, CommandRef, Delivery, Event, Input, InputSource, LanguagePair, Payload, Translation, TranslationPair,
+    BlockContent, Delivery, Event, Input, InputSource, LanguagePair, Payload, Translation, TranslationPair,
 };
 use sayso_core::settings::{llm_endpoint, SecretSlot, Secrets, Settings};
 use sayso_core::store::StoreRecord;
@@ -87,8 +87,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         let event = Event::new(
             case.languages,
             None,
-            Payload::Command {
-                command: CommandRef { id: "translate".into() },
+            Payload::Input {
                 input: Input { text: case.transcript.clone(), via: InputSource::Speech },
                 source: None,
             },

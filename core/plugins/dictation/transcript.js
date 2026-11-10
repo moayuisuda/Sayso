@@ -24,12 +24,15 @@ export function referenceTranscript(text) {
   return units;
 }
 
-/** 模型生成完整句子并决定输出顺序；原文映射只校验引用完整、无重复，不用原文覆盖模型的语法调整。 */
-export function assembleTranslation(units, reply) {
+export function readTranslationReply(reply) {
   const start = reply.indexOf("{");
   const end = reply.lastIndexOf("}");
   if (start < 0 || end <= start) throw new Error("Translator returned no JSON object");
-  const segments = JSON.parse(reply.slice(start, end + 1)).segments;
+  return JSON.parse(reply.slice(start, end + 1));
+}
+
+/** 模型生成完整句子并决定输出顺序；原文映射只校验引用完整、无重复，不用原文覆盖模型的语法调整。 */
+export function assembleTranslation(units, segments) {
   if (!Array.isArray(segments) || segments.length === 0) throw new Error("Translator returned no sentence");
   const used = new Set();
   const result = [];

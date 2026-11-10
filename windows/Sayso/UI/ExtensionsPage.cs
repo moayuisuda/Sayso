@@ -13,7 +13,7 @@ internal sealed partial class SettingsWindow
     private async Task<UIElement> ExtensionsPage()
     {
         var layout = new Grid();
-        layout.ColumnDefinitions.Add(new() { Width = new(240) });
+        layout.ColumnDefinitions.Add(new() { Width = new(216) });
         layout.ColumnDefinitions.Add(new() { Width = new(1) });
         layout.ColumnDefinitions.Add(new() { Width = new(1, GridUnitType.Star) });
         var sidebar = new Grid();
@@ -27,7 +27,7 @@ internal sealed partial class SettingsWindow
             var name = Controls.Text(manifest["name"]!.GetValue<string>());
             name.FontWeight = Microsoft.UI.Text.FontWeights.SemiBold;
             var description = Controls.Text((info["builtIn"]!.GetValue<bool>() ? L("内置", "Built-in") : L("外部扩展", "External")) + " · " + (info["enabled"]!.GetValue<bool>() ? L("已启用", "Enabled") : L("未启用", "Disabled")), 11, 0.6);
-            var item = Controls.Accented(new ListViewItem { Tag = manifest["id"]!.GetValue<string>(), Content = Controls.Stack(name, description), Padding = new(10), CornerRadius = new(8), Margin = new(0, 2, 0, 2) });
+            var item = Controls.Accented(new ListViewItem { Tag = manifest["id"]!.GetValue<string>(), Content = Controls.Stack(4, name, description), Padding = new(10, 8, 10, 8), CornerRadius = new(8), Margin = new(0, 2, 0, 2) });
             list.Items.Add(item);
         }
         list.SelectionChanged += (_, _) => Run(async () =>
@@ -36,9 +36,10 @@ internal sealed partial class SettingsWindow
             selectedExtension = (string)item.Tag;
             details.Content = await ExtensionDetails(extensions.First(e => e!["manifest"]!["id"]!.GetValue<string>() == selectedExtension)!);
         });
-        var toolbar = Controls.Stack(
-            Controls.Horizontal(Controls.Button(L("安装扩展…", "Install…"), () => Run(ChoosePackage)), Controls.Button(L("重新加载", "Reload"), () => Run(() => core!.Call("reloadExtensions")))),
-            Controls.Button(L("打开文件夹", "Open folder"), () => Run(async () => WindowsPlatform.Open((await core!.Call("extensionsDirectory"))!.GetValue<string>()))));
+        var toolbar = Controls.Stack(8, Controls.Wrap(
+            Controls.Button(L("安装扩展…", "Install…"), () => Run(ChoosePackage)),
+            Controls.Button(L("重新加载", "Reload"), () => Run(() => core!.Call("reloadExtensions"))),
+            Controls.Button(L("打开文件夹", "Open folder"), () => Run(async () => WindowsPlatform.Open((await core!.Call("extensionsDirectory"))!.GetValue<string>())))));
         toolbar.Padding = new(12);
         Grid.SetRow(toolbar, 1);
         sidebar.Children.Add(list); sidebar.Children.Add(toolbar);
@@ -67,7 +68,7 @@ internal sealed partial class SettingsWindow
         });
         var heading = Controls.Text(manifest["name"]!.GetValue<string>(), 18);
         heading.FontWeight = Microsoft.UI.Text.FontWeights.SemiBold;
-        var sections = new List<UIElement> { Controls.Stack(heading, Controls.Text(manifest["description"]?.GetValue<string>() ?? "", 12, 0.7), toggle) };
+        var sections = new List<UIElement> { Controls.Stack(8, heading, Controls.OptionalText(manifest["description"]?.GetValue<string>() ?? "", opacity: 0.7), toggle) };
         if (ExtensionFlow(info) is { } flow) sections.Add(flow);
         sections.Add(Controls.Section(L("事件与能力", "Events and capabilities"), Controls.Text(info["permissions"]!.GetValue<string>(), 12, 0.75)));
         if (info["lastResult"] is { } result)
@@ -80,7 +81,7 @@ internal sealed partial class SettingsWindow
         }
         if (!info["builtIn"]!.GetValue<bool>())
         {
-            sections.Add(Controls.Horizontal(
+            sections.Add(Controls.Wrap(
                 Controls.Button(L("导出…", "Export…"), () => Run(() => ExportPackage(id))),
                 Controls.Button(L("卸载", "Uninstall"), () => Run(async () =>
                 {
@@ -90,31 +91,17 @@ internal sealed partial class SettingsWindow
         return Task.FromResult<UIElement>(Controls.Page(sections.ToArray()));
     }
 
-    /// 扩展的运行关系图：左边是触发它的快捷键与 hook，右边是它运行后引出的 hook 及接着运行的扩展。
+    /// 扩展的运行关系图：左边是订阅的 hook，右边是它运行后引出的 hook 及接着运行的扩展。
     /// 只画确实连着的关系，哪一边没有就不画哪一边，两边都没有时整张图都不画。
     private UIElement? ExtensionFlow(JsonNode info)
     {
-        var manifest = info["manifest"]!;
-        var id = manifest["id"]!.GetValue<string>();
-        var sources = manifest["commands"]!.AsArray().Select(command => CommandNode(id, command!)).OfType<UIElement>()
-            .Concat(info["listens"]!.AsArray().Select(link => HookNode(link!))).ToList();
+        var sources = info["listens"]!.AsArray().Select(link => HookNode(link!)).ToList();
         var targets = info["emits"]!.AsArray().Select(link => HookNode(link!)).ToList();
         if (sources.Count == 0 && targets.Count == 0) return null;
         var hub = new Border { Width = 40, Height = 40, CornerRadius = new(10), Background = Controls.Brush("SaysoSelection"), Child = new FontIcon { Glyph = "\uEA86", FontSize = 20, Foreground = Controls.Brush("SaysoAccentText") } };
         var flow = FlowDiagram.Create(L("什么会触发它", "What triggers it"), sources, hub, L("它会触发什么", "What it triggers"), targets);
         flow.Opacity = info["enabled"]!.GetValue<bool>() ? 1 : 0.5;
         return flow;
-    }
-
-    /// 命令节点：快捷键、命令名与输入来源；没有快捷键的命令不会被触发，没有节点。
-    private UIElement? CommandNode(string extension, JsonNode command)
-    {
-        var commandId = command["id"]!.GetValue<string>();
-        var shortcut = Settings["shortcuts"]!.AsArray().FirstOrDefault(s => s!["command"]!["extensionId"]!.GetValue<string>() == extension && s["command"]!["commandId"]!.GetValue<string>() == commandId);
-        if (shortcut is null) return null;
-        var key = shortcut["key"]!;
-        var input = shortcut["input"]!.GetValue<string>() == "speech" ? L("语音输入", "Speech") : L("选中文本", "Selected text");
-        return FlowContent(HotkeyMonitor.KeyName(key["keyCode"]!.GetValue<uint>(), key["modifiers"]!.GetValue<ulong>()), command["title"]!.GetValue<string>(), L("输入：", "Input: ") + input);
     }
 
     /// hook 节点：hook 名、何时发生，以及另一端的扩展。
@@ -159,7 +146,7 @@ internal sealed partial class SettingsWindow
     private JsonNode? Manifest(string id) => extensions.FirstOrDefault(e => e!["manifest"]!["id"]!.GetValue<string>() == id)?["manifest"];
     private JsonNode? AppTableSpec(string id) => Manifest(id)?["tab"]?["appTable"];
 
-    /// <summary>「按应用配置」页签：顶部是固定的默认行，下方每行左边选应用、右边填文本，末尾加号加一行。</summary>
+    /// <summary>默认背景单独展示，每条补充背景由应用选择和文本组成。</summary>
     private async Task<UIElement> AppTablePage(string id, JsonNode spec)
     {
         var table = (await core!.Call("appTable", JsonValue.Create(id)))!;
@@ -170,16 +157,14 @@ internal sealed partial class SettingsWindow
         TextBox Field(string value, Action<string> changed)
         {
             var field = Controls.Field(value, changed, spec["placeholder"]?.GetValue<string>() ?? "");
-            field.Width = double.NaN;
-            field.HorizontalAlignment = HorizontalAlignment.Stretch;
             field.TextWrapping = TextWrapping.Wrap;
             field.MaxLength = spec["maxLength"]!.GetValue<int>();
             return field;
         }
         static Grid Line(UIElement leading, UIElement field)
         {
-            var line = new Grid { ColumnSpacing = 12 };
-            line.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(210) });
+            var line = new Grid { ColumnSpacing = 14 };
+            line.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(196) });
             line.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(1, GridUnitType.Star) });
             Grid.SetColumn((FrameworkElement)field, 1);
             line.Children.Add(leading);
@@ -200,21 +185,30 @@ internal sealed partial class SettingsWindow
                 app = apps.FirstOrDefault(a => a!["id"]!.GetValue<string>() == value);
                 Run(() => Save(key, app, text));
             }, value => !taken.Contains(value));
-            choice.MinWidth = 170;
-            choice.MaxWidth = 170;
+            choice.MinWidth = 0;
+            choice.HorizontalAlignment = HorizontalAlignment.Stretch;
             var remove = Controls.IconButton("\uE738", L("删除这一行", "Remove this row"), () => Run(() => core.Call("deleteRecord", new JsonObject { ["id"] = id, ["key"] = key })));
-            return Line(Controls.Horizontal(choice, remove), Field(text, value => { text = value; Run(() => Save(key, app, text)); }));
+            var appControls = new Grid { ColumnSpacing = 6, VerticalAlignment = VerticalAlignment.Center };
+            appControls.ColumnDefinitions.Add(new() { Width = new(1, GridUnitType.Star) });
+            appControls.ColumnDefinitions.Add(new() { Width = GridLength.Auto });
+            Grid.SetColumn(remove, 1);
+            appControls.Children.Add(choice);
+            appControls.Children.Add(remove);
+            return Line(appControls, Field(text, value => { text = value; Run(() => Save(key, app, text)); }));
         }
-        var defaultLine = Line(Controls.Text(L("默认", "Default")), Field(table["defaultText"]!.GetValue<string>(), value => Run(() => Save("default", null, value))));
-        var add = Controls.IconButton("\uE710", L("添加应用", "Add an app"), () => Run(() => core.Call("addAppRow", JsonValue.Create(id))));
+        var defaultField = Field(table["defaultText"]!.GetValue<string>(), value => Run(() => Save("default", null, value)));
+        Microsoft.UI.Xaml.Automation.AutomationProperties.SetName(defaultField, L("默认背景", "Default context"));
+        var add = Controls.Button(L("添加应用", "Add an app"), () => Run(() => core.Call("addAppRow", JsonValue.Create(id))));
         var description = Manifest(id)?["description"]?.GetValue<string>() ?? "";
-        var lines = rows.Select(row => AppLine(row!)).Prepend(defaultLine).Append(add).ToArray();
-        return Controls.Page(Controls.Stack(Controls.Text(description, 11, 0.65), Controls.Card(lines)));
+        var lines = rows.Select(row => AppLine(row!)).Append(add).ToArray();
+        return Controls.Page(Controls.OptionalText(description, opacity: 0.68),
+            Controls.Section(L("默认背景", "Default context"), defaultField),
+            Controls.Section(L("按应用补充", "Per-app context"), lines));
     }
 
     private async Task<UIElement> ExtensionPage(string id, string query)
     {
-        var rows = Controls.Stack();
+        var rows = Controls.Stack(8);
         var count = Controls.Text("", 11, 0.65);
         var search = new TextBox { PlaceholderText = L("搜索…", "Search…"), Text = query, FontSize = 13 };
         CancellationTokenSource? pending = null;
@@ -245,6 +239,12 @@ internal sealed partial class SettingsWindow
             catch (OperationCanceledException) { }
         });
         await Load(query);
-        return Controls.Page(Controls.Stack(search, count, rows));
+        var toolbar = new Grid { ColumnSpacing = 12 };
+        toolbar.ColumnDefinitions.Add(new() { Width = new(1, GridUnitType.Star) });
+        toolbar.ColumnDefinitions.Add(new() { Width = GridLength.Auto });
+        Grid.SetColumn(count, 1);
+        toolbar.Children.Add(search);
+        toolbar.Children.Add(count);
+        return Controls.Page(toolbar, rows);
     }
 }

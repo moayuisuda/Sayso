@@ -70,7 +70,7 @@ impl Inner {
                     ActionContext::Tab { record } => (ActionOrigin::Tab, Some(record)),
                 };
                 let payload = Payload::Action { action: ActionInvocation { block_id, payload, origin, record } };
-                let route = Route::Target { extension_id: source.into(), reports_failure: false };
+                let route = Route::Target { extension_id: source.into() };
                 self.dispatch(payload, surface_id.as_deref(), route);
             }
             // 删除需要二次确认并展示失败原因，由页签确认后调用 `Core::delete_record`。

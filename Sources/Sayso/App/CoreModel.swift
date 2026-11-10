@@ -141,27 +141,12 @@ final class CoreModel {
         extensions.filter { $0.enabled && $0.manifest.tab != nil }
     }
 
-    /// 已启用扩展的命令，按注册顺序。
-    var enabledCommands: [EnabledCommand] {
-        extensions.filter(\.enabled).flatMap { info in
-            info.manifest.commands.map {
-                EnabledCommand(key: CommandKey(extensionId: info.manifest.id, commandId: $0.id), spec: $0)
-            }
-        }
+    func shortcut(for input: InputSource) -> Hotkey? {
+        settings.shortcuts.first { $0.input == input }?.key
     }
 
-    /// 命令的快捷键及其输入来源。
-    func shortcut(of command: CommandKey) -> (key: Hotkey, input: InputSource)? {
-        settings.shortcuts.first { $0.value.command == command }.map { ($0.key, $0.value.input) }
-    }
-
-    /// 宿主只提交编辑意图：快捷键被其他命令占用时的移交、输入来源的保留由 core 统一处理。
-    func setShortcut(_ key: Hotkey?, of command: CommandKey) {
-        applySettingsChange { try core.setShortcut(command: command, key: key) }
-    }
-
-    func setInput(_ input: InputSource, of command: CommandKey) {
-        applySettingsChange { try core.setShortcutInput(command: command, input: input) }
+    func setShortcut(_ key: Hotkey?, for input: InputSource) {
+        applySettingsChange { try core.setShortcut(input: input, key: key) }
     }
 
     func storeRevision(_ id: String) -> Int {
@@ -204,14 +189,6 @@ final class CoreModel {
         update = release
         onUpdateAvailable(release)
     }
-}
-
-/// 已启用扩展的一个命令。
-struct EnabledCommand: Identifiable {
-    let key: CommandKey
-    let spec: CommandSpec
-
-    var id: CommandKey { key }
 }
 
 /// core 推送的状态按到达顺序转交主线程（主队列先进先出，保证会话状态不乱序）。

@@ -17,7 +17,7 @@ use crate::platform::{CoreObserver, Platform};
 use crate::plugin::CatalogProblem;
 use crate::protocol::{AppInfo, AppTableSpec, Block, BlockAction, Capability, InputSource, Manifest};
 use crate::session::{ActionContext, Session, SessionState};
-use crate::settings::{self, CommandKey, Hotkey, PlatformDefaults, SecretSlot, Secrets, Settings};
+use crate::settings::{self, Hotkey, PlatformDefaults, SecretSlot, Secrets, Settings};
 use crate::store::{StoreWrite, Stores};
 use crate::update::{self, AppRelease};
 
@@ -41,6 +41,8 @@ pub(crate) struct Inner {
     pub stores: Stores,
     pub extensions: RwLock<Extensions>,
     pub session: Mutex<Session>,
+    /// 多个订阅者写入时，平台剪贴板操作逐个完成。
+    pub insertion: tokio::sync::Mutex<()>,
     /// 当前录音的音频入口，与会话分开加锁：平台在 `stop_audio` 中同步送出尾部音频时不会与会话锁冲突。
     pub audio: Mutex<Option<AudioFeed>>,
     /// 已解压、等待用户确认的扩展包。
@@ -79,10 +81,10 @@ impl Inner {
     }
 
     /// 修改并保存设置，通知 UI。
-    fn modify_settings(&self, change: impl FnOnce(&mut Settings)) -> Result<(), CoreError> {
+    fn modify_settings(&self, change: impl FnOnce(&mut Settings) -> Result<(), CoreError>) -> Result<(), CoreError> {
         let mut settings = self.settings.write().unwrap();
         let mut updated = settings.clone();
-        change(&mut updated);
+        change(&mut updated)?;
         settings::save(&self.paths.settings, &updated)?;
         set_native_language(updated.native_language);
         *settings = updated;
@@ -179,6 +181,7 @@ impl Core {
             settings: RwLock::new(settings),
             secrets: RwLock::new(secrets),
             session: Mutex::new(Session::default()),
+            insertion: tokio::sync::Mutex::default(),
             audio: Mutex::default(),
             staged_packages: Mutex::default(),
             http,
@@ -277,18 +280,18 @@ impl Core {
     }
 
     pub fn update_settings(&self, settings: Settings) -> Result<(), CoreError> {
-        self.inner.modify_settings(|current| *current = settings.normalized(current))
+        self.inner.modify_settings(|current| {
+            *current = settings.normalized(current);
+            Ok(())
+        })
     }
 
-    /// 设置命令的快捷键（`None` 为移除），然后落盘并通知宿主。规则见 `Settings::set_shortcut`。
-    pub fn set_shortcut(&self, command: CommandKey, key: Option<Hotkey>) -> Result<(), CoreError> {
-        let fixed = self.inner.extensions.read().unwrap().command_spec(&command).and_then(|spec| spec.input);
-        self.inner.modify_settings(|settings| settings.set_shortcut(command, key, fixed))
-    }
-
-    /// 修改命令快捷键的输入来源。
-    pub fn set_shortcut_input(&self, command: CommandKey, input: InputSource) -> Result<(), CoreError> {
-        self.inner.modify_settings(|settings| settings.set_shortcut_input(&command, input))
+    /// 只修改输入入口的快捷键。
+    pub fn set_shortcut(&self, input: InputSource, key: Option<Hotkey>) -> Result<(), CoreError> {
+        self.inner.modify_settings(|settings| {
+            settings.set_shortcut(input, key);
+            Ok(())
+        })
     }
 
     pub fn secret(&self, slot: SecretSlot) -> String {
@@ -327,14 +330,13 @@ impl Core {
         }
         self.inner.modify_settings(|settings| {
             settings.asr_options.entry(source_id).or_default().insert(field_key, value);
+            Ok(())
         })
     }
 
-    /// 需要监听的快捷键：触发已启用命令的快捷键。
+    /// 监听 Sayso 的输入快捷键，独立于扩展状态。
     pub fn active_shortcuts(&self) -> Vec<Hotkey> {
-        let settings = self.inner.settings();
-        let extensions = self.inner.extensions.read().unwrap();
-        settings.shortcuts.keys().filter(|key| extensions.command_for(&settings, **key).is_some()).copied().collect()
+        self.settings().shortcuts.into_iter().map(|shortcut| shortcut.key).collect()
     }
 
     /// 翻译模型的必填项是否齐全。
@@ -394,7 +396,8 @@ impl Core {
     // MARK: 扩展
 
     pub fn extensions(&self) -> Vec<ExtensionInfo> {
-        self.inner.extensions.read().unwrap().infos(&self.inner.settings())
+        let settings = self.settings();
+        self.inner.extensions.read().unwrap().infos(&settings)
     }
 
     /// 已安装扩展所在的文件夹。
@@ -412,6 +415,7 @@ impl Core {
             if enabled {
                 settings.enabled_extensions.push(extension_id.clone());
             }
+            Ok(())
         })?;
         self.inner.observer.extensions_changed();
         if enabled {

@@ -13,8 +13,8 @@ pub enum CoreError {
     CapabilityNotGranted(Capability),
     #[error("{}", tr("未配置翻译模型", "No translation model configured"))]
     ModelNotConfigured,
-    #[error("insert is only allowed while handling the command event")]
-    InsertOutsideCommand,
+    #[error("insert is only allowed while handling the input event")]
+    InsertOutsideInput,
     #[error("Invalid extension package: {0}")]
     InvalidPackage(String),
     #[error("{0}")]

@@ -22,7 +22,7 @@ struct ExtensionsSettingsView: View {
                 .frame(width: 260)
             Divider()
             if let selected {
-                ExtensionDetail(info: selected, model: model, packages: packages) { enable in
+                ExtensionDetail(info: selected, packages: packages) { enable in
                     if enable, !selected.builtIn {
                         pendingApproval = selected
                     } else {
@@ -159,7 +159,6 @@ private struct ExtensionIcon: View {
 
 private struct ExtensionDetail: View {
     let info: ExtensionInfo
-    let model: CoreModel
     let packages: ExtensionPackageManager
     let setEnabled: (Bool) -> Void
 
@@ -172,7 +171,7 @@ private struct ExtensionDetail: View {
             VStack(alignment: .leading, spacing: 24) {
                 header
 
-                ExtensionFlow(info: info, model: model)
+                ExtensionFlow(info: info)
 
                 SettingsSection(L("能力", "Capabilities")) {
                     if manifest.capabilities.isEmpty {
@@ -243,33 +242,19 @@ private struct ExtensionDetail: View {
     }
 }
 
-/// 扩展的运行关系图：左边是触发它的快捷键与 hook，右边是它运行后引出的 hook 及接着运行的扩展。
+/// 左边显示订阅的事件，右边显示它可以广播的事件及订阅者。
 /// 只画确实连着的关系，哪一边没有就不画哪一边，两边都没有时整张图都不画。
 private struct ExtensionFlow: View {
     let info: ExtensionInfo
-    let model: CoreModel
-
-    private var manifest: Manifest { info.manifest }
-
-    /// 设了快捷键的命令；没有快捷键的命令不会被触发。
-    private var triggers: [(command: CommandSpec, shortcut: (key: Hotkey, input: InputSource))] {
-        manifest.commands.compactMap { command in
-            model.shortcut(of: CommandKey(extensionId: manifest.id, commandId: command.id)).map { (command, $0) }
-        }
-    }
 
     var body: some View {
-        let triggers = triggers
-        let hasSources = !triggers.isEmpty || !info.listens.isEmpty
+        let hasSources = !info.listens.isEmpty
         let hasTargets = !info.emits.isEmpty
         if hasSources || hasTargets {
             FlowDiagram(
                 sourcesTitle: hasSources ? L("什么会触发它", "What triggers it") : nil,
                 targetsTitle: hasTargets ? L("它会触发什么", "What it triggers") : nil
             ) {
-                ForEach(triggers, id: \.command.id) { trigger in
-                    FlowNode(side: .source) { CommandNode(command: trigger.command, shortcut: trigger.shortcut) }
-                }
                 ForEach(info.listens, id: \.event) { link in
                     FlowNode(side: .source) { HookNode(link: link) }
                 }
@@ -282,18 +267,6 @@ private struct ExtensionFlow: View {
             }
             .opacity(info.enabled ? 1 : 0.5)
         }
-    }
-}
-
-/// 命令节点：快捷键、命令名与输入来源。
-private struct CommandNode: View {
-    let command: CommandSpec
-    let shortcut: (key: Hotkey, input: InputSource)
-
-    var body: some View {
-        KeycapRow(keys: shortcut.key.keycaps)
-        Text(command.title).font(.system(size: 12))
-        FlowCaption(text: L("输入：\(shortcut.input.displayName)", "Input: \(shortcut.input.displayName)"))
     }
 }
 

@@ -39,12 +39,15 @@ internal sealed partial class SettingsWindow
             Controls.Section(L("语言", "Languages"),
                 Controls.Row(L("目标语言", "Target language"), SettingChoice("targetLanguage", Options(languages), enabled: value => Recognizes(SelectedAsrSource, value)), LanguageCaption()),
                 Controls.Row(L("本地语言", "Native language"), SettingChoice("nativeLanguage", Options(languages), true, value => Recognizes(SelectedAsrSource, value)), L("不会说的词直接用本地语言说，会自动翻译成目标语言。", "Say unfamiliar words in your native language to translate them in place."))),
-            Controls.Section(L("快捷键", "Shortcuts"), ShortcutRows().ToArray()),
+            Controls.Section(L("快捷键", "Shortcuts"),
+                ShortcutRow("speech"), ShortcutRow("selection"),
+                Controls.Row(L("语音触发方式", "Voice shortcut mode"), SettingChoice("hotkeyStyle",
+                    [("hold", L("按住说话", "Hold to talk")), ("toggle", L("按一下开始 / 结束", "Press to toggle"))]))),
             Controls.Section(L("朗读", "Pronunciation"),
                 Controls.Row(L("自动朗读", "Read aloud"), autoSpeak),
                 Controls.Row(L("系统语音", "System voices"), Controls.Button(L("管理朗读语音", "Manage voices"), () => WindowsPlatform.Open("ms-settings:speech")),
                     L("朗读需要安装对应语言的系统语音，可在 Windows 语音设置中添加。安装完成后重启 Sayso。", "Install a system voice for each language in Windows Speech settings, then restart Sayso.")),
-                Controls.Row(L("语速", "Speed"), Controls.Horizontal(rate, Controls.Button(L("试听", "Preview"), () => Run(() => Task.Run(() => platform!.Speak("Practice makes perfect.", "en-US", (float)rate.Value))))))),
+                Controls.Row(L("语速", "Speed"), Controls.Wrap(rate, Controls.Button(L("试听", "Preview"), () => Run(() => Task.Run(() => platform!.Speak("Practice makes perfect.", "en-US", (float)rate.Value))))))),
             Controls.Section(L("权限", "Permissions"),
                 Controls.Row(L("麦克风", "Microphone"), Controls.Button(L("打开麦克风设置", "Microphone settings"), () => WindowsPlatform.Open("ms-settings:privacy-microphone")), L("请允许桌面应用访问麦克风。录音只在快捷键触发时进行。", "Allow desktop apps to access the microphone. Recording starts only when triggered.")),
                 Controls.Row(L("数据文件夹", "Data folder"), Controls.Button(L("打开文件夹", "Open folder"), () => WindowsPlatform.Open(App.DataDirectory)), L("API Key 保存在数据文件夹的 config.json 中。", "API keys are stored in config.json in the data folder."))),
@@ -52,101 +55,67 @@ internal sealed partial class SettingsWindow
         );
     }
 
-    /// 已启用扩展的命令各一行：快捷键（单修饰键或组合键，点击后录制），以及命令没有固定输入时的输入来源。
-    /// 触发方式对所有语音快捷键生效，只显示在第一个语音命令下。
-    /// 一个快捷键只对应一个命令，设成其他命令的快捷键时那个命令的快捷键被清除。
-    private IEnumerable<UIElement> ShortcutRows()
+    private string InputTitle(string input) => input == "speech" ? L("语音输入", "Voice input") : L("划词", "Selected text");
+
+    private UIElement ShortcutRow(string input)
     {
-        var modeShown = false;
-        foreach (var info in extensions.Where(e => e!["enabled"]!.GetValue<bool>()))
+        var key = Settings["shortcuts"]!.AsArray().FirstOrDefault(item => item!["input"]!.GetValue<string>() == input)?["key"];
+        var recorder = Controls.Button(key is null ? L("设置快捷键", "Set shortcut") :
+            HotkeyMonitor.KeyName(key["keyCode"]!.GetValue<uint>(), key["modifiers"]!.GetValue<ulong>()), () => { });
+        recorder.Click += (_, _) =>
         {
-            var manifest = info!["manifest"]!;
-            var extension = manifest["id"]!.GetValue<string>();
-            foreach (var command in manifest["commands"]!.AsArray())
-            {
-                var commandId = command!["id"]!.GetValue<string>();
-                var shortcut = Settings["shortcuts"]!.AsArray().FirstOrDefault(s => s!["command"]!["extensionId"]!.GetValue<string>() == extension && s["command"]!["commandId"]!.GetValue<string>() == commandId);
-                var key = shortcut?["key"];
-                var recorder = Controls.Button(key is null ? L("设置快捷键", "Set shortcut") : HotkeyMonitor.KeyName(key["keyCode"]!.GetValue<uint>(), key["modifiers"]!.GetValue<ulong>()), () => { });
-                recorder.Click += (_, _) =>
-                {
-                    recorder.Content = L("请按下快捷键…", "Press a shortcut…");
-                    Hotkeys!.KeyRecorded = (code, modifiers) => Run(() => SetShortcut(extension, commandId, new JsonObject { ["keyCode"] = code, ["modifiers"] = modifiers }));
-                    Hotkeys.IsRecordingKey = true;
-                };
-                recorder.MinWidth = 130;
-                var field = new Grid();
-                field.Children.Add(recorder);
-                var controls = Controls.Horizontal(field);
-                if (shortcut is not null)
-                {
-                    // 清除按钮在框内，只在悬停时显示。
-                    var clear = Controls.IconButton("\uE711", L("清除", "Clear"), () => Run(() => SetShortcut(extension, commandId, null)));
-                    clear.HorizontalAlignment = HorizontalAlignment.Right;
-                    clear.Margin = new(0, 0, 4, 0);
-                    clear.Visibility = Visibility.Collapsed;
-                    field.Children.Add(clear);
-                    field.PointerEntered += (_, _) => clear.Visibility = Visibility.Visible;
-                    field.PointerExited += (_, _) => clear.Visibility = Visibility.Collapsed;
-                    if (!modeShown && shortcut["input"]!.GetValue<string>() == "speech")
-                    {
-                        modeShown = true;
-                        controls.Children.Add(SettingChoice("hotkeyStyle", [("hold", L("按住说话", "Hold to talk")), ("toggle", L("按一下开始 / 结束", "Press to toggle"))]));
-                    }
-                    if (command["input"] is null)
-                        controls.Children.Add(Controls.Choice([("speech", L("语音输入", "Speech")), ("selection", L("选中文本", "Selected text"))], shortcut["input"]!.GetValue<string>(),
-                            value => Run(() => SetShortcutInput(extension, commandId, value))));
-                }
-                yield return Controls.Row(command["title"]!.GetValue<string>(), controls);
-            }
-        }
+            recorder.Content = L("请按下快捷键…", "Press a shortcut…");
+            Hotkeys!.KeyRecorded = (code, modifiers) => Run(() => SetShortcut(input, new JsonObject { ["keyCode"] = code, ["modifiers"] = modifiers }));
+            Hotkeys.IsRecordingKey = true;
+        };
+        recorder.MinWidth = 130;
+        var field = Controls.Wrap(recorder);
+        if (key is not null) field.Children.Add(Controls.IconButton("\uE711", L("清除", "Clear"), () => Run(() => SetShortcut(input, null))));
+        return Controls.Row(InputTitle(input), field);
     }
 
-    private async Task SetShortcut(string extension, string command, JsonObject? key)
+    private async Task SetShortcut(string input, JsonObject? key)
     {
-        // 快捷键的移交与输入来源的保留由核心完成。
-        Settings = (await core!.Call("setShortcut", new JsonObject { ["command"] = CommandKey(extension, command), ["key"] = key }))!;
+        Settings = (await core!.Call("setShortcut", new JsonObject { ["input"] = input, ["key"] = key }))!;
         Hotkeys!.Settings = Settings;
-        // 被移走快捷键的命令也要刷新。
         await Navigate("general");
     }
-
-    private async Task SetShortcutInput(string extension, string command, string input)
-    {
-        Settings = (await core!.Call("setShortcutInput", new JsonObject { ["command"] = CommandKey(extension, command), ["input"] = input }))!;
-        Hotkeys!.Settings = Settings;
-    }
-
-    private static JsonObject CommandKey(string extension, string command) => new() { ["extensionId"] = extension, ["commandId"] = command };
 
     /// 当前版本与手动检查更新；已发现新版本时显示下载入口。
     private UIElement VersionRow()
     {
         var status = Controls.Text("", 12, 0.62);
         var download = Controls.Button(L("前往下载", "Download"), OpenUpdate);
+        var feedback = Controls.Wrap(status, download);
+        Microsoft.UI.Xaml.Automation.AutomationProperties.SetAutomationId(feedback, "UpdateFeedback");
+        void SetStatus(string message)
+        {
+            status.Text = message;
+            // 隐藏整行，避免状态文本为空时仍留下行高和间距。
+            feedback.Visibility = string.IsNullOrWhiteSpace(message) ? Visibility.Collapsed : Visibility.Visible;
+        }
         void ShowUpdate()
         {
             download.Visibility = Update is null ? Visibility.Collapsed : Visibility.Visible;
-            if (Update is { } update) status.Text = L($"新版本 {update["version"]!.GetValue<string>()} 已发布", $"Version {update["version"]!.GetValue<string>()} is available");
+            if (Update is { } update) SetStatus(L($"新版本 {update["version"]!.GetValue<string>()} 已发布", $"Version {update["version"]!.GetValue<string>()} is available"));
         }
         var check = Controls.Button(L("检查更新", "Check for updates"), () => { });
         check.Click += (_, _) => Run(async () =>
         {
             check.IsEnabled = false;
-            status.Text = L("正在检查…", "Checking…");
+            SetStatus(L("正在检查…", "Checking…"));
             try
             {
                 Update = await core!.Call("checkForUpdate");
-                if (Update is null) status.Text = L("已是最新版本", "You're up to date");
+                if (Update is null) SetStatus(L("已是最新版本", "You're up to date"));
                 ShowUpdate();
             }
-            catch (Exception error) { status.Text = error.Message; }
+            catch (Exception error) { SetStatus(error.Message); }
             finally { check.IsEnabled = true; }
         });
+        SetStatus("");
         ShowUpdate();
-        var content = Controls.Stack(Controls.Horizontal(Controls.Text(appVersion), check), Controls.Horizontal(status, download));
-        content.Spacing = 6;
-        return Controls.Row(L("版本", "Version"), content);
+        return Controls.Row(L("版本", "Version"), Controls.Stack(6, Controls.Wrap(Controls.Text(appVersion), check), feedback));
     }
 
     private async Task<UIElement> ModelsPage() => Controls.Page(await SpeechModelSection(), await LlmSection());
@@ -169,7 +138,7 @@ internal sealed partial class SettingsWindow
                 var fieldKey = field!["key"]!.GetValue<string>();
                 var value = (await core!.Call("asrValue", new JsonObject { ["source"] = sourceId, ["field"] = fieldKey }))!.GetValue<string>();
                 void Set(string changed) => Run(() => core.Call("setAsrValue", new JsonObject { ["source"] = sourceId, ["field"] = fieldKey, ["value"] = changed }));
-                UIElement control = field["kind"]!.GetValue<string>() switch
+                FrameworkElement control = field["kind"]!.GetValue<string>() switch
                 {
                     "secret" => Controls.Secret(value, Set),
                     "choice" => Controls.Choice(Options(field["options"]!.AsArray()), value, Set),
@@ -198,7 +167,8 @@ internal sealed partial class SettingsWindow
         rows.Add(Controls.Row(L("模型", "Model"), SettingField("llmModel")));
         rows.Add(Controls.Row(L("思考强度", "Reasoning"), SettingChoice("llmReasoning", [("modelDefault", L("模型默认", "Model default")), ("none", L("关闭（最快）", "Off (fastest)")), ("low", L("低", "Low")), ("medium", L("中", "Medium")), ("high", L("高", "High"))]),
             L("仅混说时调用模型。翻译短句可关闭思考；若服务不支持该参数，请选择模型默认。", "Only mixed language input calls the model. Turn reasoning off for short translations, or use Model default if unsupported.")));
-        var output = Controls.Text("", 12);
+        var output = Controls.OptionalText();
+        Microsoft.UI.Xaml.Automation.AutomationProperties.SetAutomationId(output, "TranslationTestFeedback");
         var test = Controls.Button(L("测试翻译", "Run test"), () => { });
         test.Background = Controls.Accent;
         test.Foreground = new SolidColorBrush(Microsoft.UI.Colors.White);
@@ -210,7 +180,7 @@ internal sealed partial class SettingsWindow
             catch (Exception error) { output.Text = error.Message; }
             finally { test.IsEnabled = true; }
         });
-        rows.Add(Controls.Row(L("连通性", "Connection"), Controls.Stack(test, output), L("用当前模型翻译一句示例，检查地址、密钥与模型名是否正确。", "Translate a sample to verify the URL, key and model name.")));
+        rows.Add(Controls.Row(L("连通性", "Connection"), Controls.Stack(6, test, output), L("用当前模型翻译一句示例，检查地址、密钥与模型名是否正确。", "Translate a sample to verify the URL, key and model name.")));
         return Controls.Section(L("大模型", "Large language model"), rows.ToArray());
     }
 }

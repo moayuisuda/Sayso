@@ -37,10 +37,20 @@ struct GeneralSettingsView: View {
             }
 
             SettingsSection(L("快捷键", "Shortcuts")) {
-                // 触发方式对所有语音快捷键生效，只显示在第一个语音命令下。
-                let firstSpeech = model.enabledCommands.first { model.shortcut(of: $0.key)?.input == .speech }?.id
-                ForEach(model.enabledCommands) { command in
-                    ShortcutRow(command: command, model: model, hotkeys: hotkeys, showsMode: command.id == firstSpeech)
+                ForEach(InputSource.allCases) { input in
+                    SettingsRow(title: input.displayName) {
+                        HotkeyRecorder(
+                            hotkey: Binding(get: { model.shortcut(for: input) }, set: { model.setShortcut($0, for: input) }),
+                            monitor: hotkeys
+                        )
+                    }
+                }
+                SettingsRow(title: L("语音触发方式", "Voice shortcut mode")) {
+                    Picker(L("触发方式", "Mode"), selection: model.binding(\.hotkeyStyle)) {
+                        ForEach(HotkeyStyle.allCases) { Text($0.displayName).tag($0) }
+                    }
+                    .labelsHidden()
+                    .fixedSize()
                 }
             }
 
@@ -121,43 +131,6 @@ struct GeneralSettingsView: View {
         }
         .labelsHidden()
         .fixedSize()
-    }
-}
-
-/// 命令的快捷键（单修饰键或组合键，可清除），以及命令没有固定输入时的输入来源。一个快捷键只对应一个命令：设成其他命令的快捷键时，那个命令的快捷键被清除。
-private struct ShortcutRow: View {
-    let command: EnabledCommand
-    let model: CoreModel
-    let hotkeys: HotkeyMonitor
-    let showsMode: Bool
-
-    var body: some View {
-        let shortcut = model.shortcut(of: command.key)
-        SettingsRow(title: command.spec.title) {
-            HStack(spacing: 8) {
-                HotkeyRecorder(
-                    hotkey: Binding(get: { shortcut?.key }, set: { model.setShortcut($0, of: command.key) }),
-                    monitor: hotkeys
-                )
-                if let shortcut {
-                    if showsMode {
-                        Picker(L("触发方式", "Mode"), selection: model.binding(\.hotkeyStyle)) {
-                            ForEach(HotkeyStyle.allCases) { Text($0.displayName).tag($0) }
-                        }
-                        .labelsHidden()
-                        .fixedSize()
-                    }
-                    if command.spec.input == nil {
-                        Picker(L("输入", "Input"), selection: Binding(get: { shortcut.input }, set: { model.setInput($0, of: command.key) })) {
-                            ForEach(InputSource.allCases) { Text($0.displayName).tag($0) }
-                        }
-                        .labelsHidden()
-                        .fixedSize()
-                        .help(L("命令收到的输入", "Input the command receives"))
-                    }
-                }
-            }
-        }
     }
 }
 

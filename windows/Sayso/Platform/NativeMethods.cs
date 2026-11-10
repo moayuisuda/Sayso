@@ -5,9 +5,11 @@ namespace Sayso.Platform;
 internal static class NativeMethods
 {
     internal const uint TrayMessage = 0x8002;
+    internal const uint WindowOwner = 4;
     internal const nuint InjectionTag = 0x5359534F;
     internal delegate nint HookProc(int code, nint message, nint data);
     internal delegate void WinEventProc(nint hook, uint eventType, nint window, int objectId, int childId, uint thread, uint time);
+    [return: MarshalAs(UnmanagedType.Bool)] internal delegate bool EnumWindowsProc(nint window, nint parameter);
     internal delegate nint SubclassProc(nint hwnd, uint message, nuint wparam, nint lparam, nuint id, nuint data);
     [StructLayout(LayoutKind.Sequential)] internal struct KeyboardEvent { public uint Key, Scan, Flags, Time; public nuint Extra; }
     [StructLayout(LayoutKind.Sequential)] internal struct Input { public uint Type; public InputUnion Data; }
@@ -36,6 +38,9 @@ internal static class NativeMethods
     [DllImport("dwmapi")] private static extern int DwmSetWindowAttribute(nint window, uint attribute, ref uint value, uint size);
     [DllImport("user32")] [return: MarshalAs(UnmanagedType.Bool)] internal static extern bool SetForegroundWindow(nint window);
     [DllImport("user32")] internal static extern uint GetWindowThreadProcessId(nint window, out uint process);
+    [DllImport("user32", SetLastError = true)] [return: MarshalAs(UnmanagedType.Bool)] internal static extern bool EnumWindows(EnumWindowsProc callback, nint parameter);
+    [DllImport("user32")] [return: MarshalAs(UnmanagedType.Bool)] internal static extern bool IsWindowVisible(nint window);
+    [DllImport("user32")] internal static extern nint GetWindow(nint window, uint command);
     [DllImport("user32")] internal static extern short GetAsyncKeyState(int key);
     [DllImport("user32", SetLastError = true)] internal static extern uint SendInput(uint count, Input[] inputs, int size);
     [DllImport("user32", SetLastError = true)] internal static extern nint SetWindowsHookExW(int id, HookProc callback, nint module, uint thread);

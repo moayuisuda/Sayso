@@ -173,11 +173,7 @@ impl Bridge {
             "settings" => Ok(json!(core.settings())),
             "updateSettings" => { core.update_settings(decode(args)?).map_err(|e| e.to_string())?; Ok(json!(core.settings())) }
             "setShortcut" => {
-                core.set_shortcut(decode(args["command"].clone())?, decode(args["key"].clone())?).map_err(|e| e.to_string())?;
-                Ok(json!(core.settings()))
-            }
-            "setShortcutInput" => {
-                core.set_shortcut_input(decode(args["command"].clone())?, decode(args["input"].clone())?).map_err(|e| e.to_string())?;
+                core.set_shortcut(decode(args["input"].clone())?, decode(args["key"].clone())?).map_err(|e| e.to_string())?;
                 Ok(json!(core.settings()))
             }
             "session" => Ok(session_json(core.session_state())),

@@ -9,7 +9,7 @@ use async_trait::async_trait;
 use sayso_core::error::CoreError;
 use sayso_core::plugin::{built_in_plugins, load_installed, run, Host, Instruction, Plugin, RunResult, RunStatus};
 use sayso_core::protocol::{
-    ActionInvocation, ActionKind, ActionOrigin, AppInfo, Block, BlockAction, BlockContent, CommandRef, Delivery, Event,
+    ActionInvocation, ActionKind, ActionOrigin, AppInfo, Block, BlockAction, BlockContent, Delivery, Event,
     Input, InputSource, Language, LanguagePair, Payload, SurfaceSnapshot, TextStyle, Tone, Translation,
     TranslationPair,
 };
@@ -116,12 +116,11 @@ fn temporary_stores() -> (tempfile::TempDir, Arc<Stores>) {
     (directory, stores)
 }
 
-fn command(text: &str, via: InputSource) -> Event {
+fn input_event(text: &str, via: InputSource) -> Event {
     Event::new(
         LanguagePair::default(),
         Some(SurfaceSnapshot { id: "s".into(), blocks: vec![] }),
-        Payload::Command {
-            command: CommandRef { id: "translate".into() },
+        Payload::Input {
             input: Input { text: text.into(), via },
             source: Some(AppInfo { id: Some("com.apple.Notes".into()), name: Some("Notes".into()) }),
         },
@@ -192,7 +191,7 @@ fn carded(target: &str, native: &str, card: &str) -> TranslationPair {
 async fn run_dictation(transcript: &str, reply: &str, delivery: Delivery) -> (RunResult, Arc<FakeHost>) {
     let (_directory, stores) = temporary_stores();
     let host = FakeHost::new("sayso.dictation", reply, delivery, stores);
-    let result = run(&built_in("sayso.dictation"), &command(transcript, InputSource::Speech), host.clone()).await;
+    let result = run(&built_in("sayso.dictation"), &input_event(transcript, InputSource::Speech), host.clone()).await;
     (result, host)
 }
 
@@ -247,6 +246,45 @@ async fn dictation_translates_inserts_speaks_and_publishes() {
     );
 }
 
+/// 外部替代命令沿用混说流程，一次模型请求得到整句与单词释义。
+#[tokio::test]
+async fn third_party_dictation_subscribes_to_speech_and_publishes_words() {
+    let repo = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../..");
+    let recipe = repo.join("examples/dictation-words");
+    let dictation = repo.join("core/plugins/dictation");
+    let directory = tempfile::tempdir().unwrap();
+    for name in ["extension.json", "main.js"] {
+        std::fs::copy(recipe.join(name), directory.path().join(name)).unwrap();
+    }
+    std::fs::copy(dictation.join("main.js"), directory.path().join("dictation.js")).unwrap();
+    for name in ["prompt.js", "languages.js", "transcript.js"] {
+        std::fs::copy(dictation.join(name), directory.path().join(name)).unwrap();
+    }
+    let plugin = sayso_core::plugin::load_one(directory.path()).unwrap();
+    let (_directory, stores) = temporary_stores();
+    let host = FakeHost::new(
+        plugin.id(),
+        r#"{"segments":[{"from":1,"to":2,"text":"I have "},{"from":3,"to":4,"text":"an apple"},{"from":5,"to":5,"text":"."}],
+            "words":[{"target":"have","native":"有"},{"target":"an","native":"一个"},{"target":"apple","native":"苹果"}]}"#,
+        Delivery::Inserted,
+        stores,
+    );
+    let result = run(&plugin, &input_event("I have a 苹果.", InputSource::Speech), host.clone()).await;
+    assert_eq!(result.status, RunStatus::Succeeded, "{result:?}");
+    assert_eq!(host.completions.load(Ordering::SeqCst), 1);
+    assert_eq!(host.inserted(), ["I have an apple."]);
+    assert_eq!(block_ids(&host.blocks()), ["text"]);
+    assert_eq!(
+        host.instructions().last(),
+        Some(&Instruction::PublishTranslated {
+            output: "I have an apple.".into(),
+            pairs: vec![pair("an", "一个"), pair("apple", "苹果")],
+            context: Some("I have an apple.".into()),
+            card: "text".into(),
+        })
+    );
+}
+
 /// 写入平台报错时保留译文与生词事件，不得声称已复制到剪贴板。
 #[tokio::test]
 async fn dictation_preserves_translation_and_word_pairs_when_insertion_fails() {
@@ -258,7 +296,7 @@ async fn dictation_preserves_translation_and_word_pairs_when_insertion_fails() {
         stores,
     );
     *host.insert_error.lock().unwrap() = Some("Clipboard snapshot failed".into());
-    let result = run(&built_in("sayso.dictation"), &command("I have a 苹果.", InputSource::Speech), host.clone()).await;
+    let result = run(&built_in("sayso.dictation"), &input_event("I have a 苹果.", InputSource::Speech), host.clone()).await;
     assert_eq!(result.status, RunStatus::Succeeded);
     assert!(host.inserted().is_empty());
     let blocks = host.blocks();
@@ -324,7 +362,7 @@ async fn dictation_prompt_profiles_cover_all_language_pairs_without_leaking_pair
             let (_directory, stores) = temporary_stores();
             let host = FakeHost::new("sayso.dictation", "", Delivery::Inserted, stores.clone());
             // 每种书写系统均有字符，确保所有语言对都会经过正式的模型调用入口。
-            let mut event = command("a 中 あ 한 я", InputSource::Speech);
+            let mut event = input_event("a 中 あ 한 я", InputSource::Speech);
             event.languages = LanguagePair { target, native };
             let result = run(&plugin, &event, host.clone()).await;
             assert_eq!(result.status, RunStatus::Succeeded);
@@ -367,7 +405,7 @@ async fn dictation_prompt_profiles_cover_all_language_pairs_without_leaking_pair
 
             // 把生成的例句作为输入及模型回复，验证组装、完整覆盖校验与两个词对的发布能配合工作。
             let host = FakeHost::new("sayso.dictation", &json["output"].to_string(), Delivery::Inserted, stores);
-            let mut event = command(transcript, InputSource::Speech);
+            let mut event = input_event(transcript, InputSource::Speech);
             event.languages = LanguagePair { target, native };
             assert_eq!(run(&plugin, &event, host.clone()).await.status, RunStatus::Succeeded);
             assert_eq!(host.inserted(), [output], "{target:?}/{native:?}");
@@ -387,7 +425,7 @@ async fn dictation_covers_all_japanese_chinese_spans() {
     let (_directory, stores) = temporary_stores();
     let reply = r#"{"segments":[{"from":1,"to":2,"text":"こんにちは。"},{"from":3,"to":4,"text":"わかりました。"},{"from":5,"to":6,"text":"こんにちは。"},{"from":7,"to":8,"text":"動物園に行きます。"}]}"#;
     let host = FakeHost::new("sayso.dictation", reply, Delivery::Inserted, stores);
-    let mut event = command("你好。わかりました。你好。我会去动物园。", InputSource::Speech);
+    let mut event = input_event("你好。わかりました。你好。我会去动物园。", InputSource::Speech);
     event.languages.target = Language::Japanese;
     let result = run(&built_in("sayso.dictation"), &event, host.clone()).await;
     assert_eq!(result.status, RunStatus::Succeeded);
@@ -469,7 +507,7 @@ async fn selection_translates_speaks_and_publishes() {
     let (_directory, stores) = temporary_stores();
     let host =
         FakeHost::new("sayso.selection", r#"{"from":"en","translation":"意外发现"}"#, Delivery::Inserted, stores);
-    let result = run(&built_in("sayso.selection"), &command("serendipity", InputSource::Selection), host.clone()).await;
+    let result = run(&built_in("sayso.selection"), &input_event("serendipity", InputSource::Selection), host.clone()).await;
 
     assert_eq!(result.status, RunStatus::Succeeded);
     assert_eq!(block_ids(&host.blocks()), ["translation", "original"]);
@@ -487,7 +525,7 @@ async fn selection_translates_speaks_and_publishes() {
     // 第三种语言（不是目标语言也不是本地语言）：译为本地语言并显示，不朗读，广播的词对为空。
     let (_directory, stores) = temporary_stores();
     let host = FakeHost::new("sayso.selection", r#"{"from":"fr","translation":"巅峰"}"#, Delivery::Inserted, stores);
-    let result = run(&built_in("sayso.selection"), &command("apogée", InputSource::Selection), host.clone()).await;
+    let result = run(&built_in("sayso.selection"), &input_event("apogée", InputSource::Selection), host.clone()).await;
     assert_eq!(result.status, RunStatus::Succeeded);
     assert_eq!(block_ids(&host.blocks()), ["translation", "original"]);
     assert!(speaks(&host.instructions()).is_empty());
@@ -503,7 +541,7 @@ async fn selection_translates_speaks_and_publishes() {
 
     let (_directory, stores) = temporary_stores();
     let host = FakeHost::new("sayso.selection", r#"{"translation":"x"}"#, Delivery::Inserted, stores);
-    let result = run(&built_in("sayso.selection"), &command("y", InputSource::Selection), host.clone()).await;
+    let result = run(&built_in("sayso.selection"), &input_event("y", InputSource::Selection), host.clone()).await;
     assert!(matches!(result.status, RunStatus::Failed { .. }));
     assert!(host.blocks().is_empty());
 }
@@ -690,7 +728,7 @@ async fn dictation_accepts_clause_reordering_without_per_span_word_output_requir
     let (_directory, stores) = temporary_stores();
     let reply = r#"{"segments":[{"from":1,"to":2,"text":"她对我说"},{"from":3,"to":4,"text":"你好"},{"from":5,"to":7,"text":"。"}]}"#;
     let host = FakeHost::new("sayso.dictation", reply, Delivery::Inserted, stores);
-    let mut event = command("She said nee how to me.", InputSource::Speech);
+    let mut event = input_event("She said nee how to me.", InputSource::Speech);
     event.languages = LanguagePair { target: Language::Chinese, native: Language::English };
     assert_eq!(run(&built_in("sayso.dictation"), &event, host.clone()).await.status, RunStatus::Succeeded);
     assert_eq!(host.inserted(), ["她对我说你好。"]);
@@ -726,12 +764,12 @@ fn manifest(capabilities: &str, timeout: u32) -> String {
     )
 }
 
-/// 第三方扩展也能是后处理扩展：声明命令并申请广播；命令必须同时订阅 command。
+/// 扩展使用 input 订阅文本；已移除的 command 不能再注册。
 #[test]
-fn third_party_extensions_can_be_triggers() {
+fn extensions_subscribe_to_input_events() {
     for (extra, loads) in [
-        (r#""events":["command"],"commands":[{"id":"x","title":"X"}],"capabilities":["publish"]"#, true),
-        (r#""events":["translated"],"commands":[{"id":"x","title":"X"}]"#, false),
+        (r#""events":["input"],"capabilities":["publish"]"#, true),
+        (r#""events":["command"]"#, false),
     ] {
         let root = tempfile::tempdir().unwrap();
         let directory = root.path().join("plugin");
@@ -745,7 +783,7 @@ fn third_party_extensions_can_be_triggers() {
 }
 
 /// 未声明的能力被拒绝并记为警告，插件仍能继续；相对导入只在扩展目录内解析；
-/// 不在命令中时不能写入其他应用。
+/// 只有 input 处理函数能直接写入其他应用。
 #[tokio::test]
 async fn runtime_enforces_capabilities_and_resolves_imports() {
     let root = tempfile::tempdir().unwrap();

@@ -156,64 +156,38 @@ internal static class SmokeTests
             candidate.ValidateCompactNotice();
             await core.Call("dismiss");
         });
-        await Check("Selecting a corner on the screen preview moves the visible candidate", async () =>
+        await Check("Selecting a bottom position moves the visible candidate", async () =>
         {
             window.Show();
             await window.Navigate("general");
             ((Microsoft.UI.Xaml.FrameworkElement)window.Content).UpdateLayout();
-            var section = Descendants(window.Content).OfType<CandidatePositionPicker>().Single();
-            var screen = Descendants(section).OfType<Microsoft.UI.Xaml.Controls.Grid>().Single(grid =>
-                Microsoft.UI.Xaml.Automation.AutomationProperties.GetAutomationId(grid) == "CandidatePositionScreen");
-            var buttons = screen.Children.OfType<Microsoft.UI.Xaml.Controls.Button>().ToArray();
-            if (buttons.Length != 4 || screen.RowDefinitions.Count != 0 || screen.ColumnDefinitions.Count != 0)
-                throw new Exception("Expected four corner buttons on one screen.");
+            var values = new[] { ("bottomLeft", -1), ("bottomCenter", 0), ("bottomRight", 1) };
+            var buttons = Descendants(window.Content).OfType<Microsoft.UI.Xaml.Controls.Primitives.ToggleButton>()
+                .Where(button => values.Any(v => v.Item1 == Microsoft.UI.Xaml.Automation.AutomationProperties.GetAutomationId(button)))
+                .ToDictionary(button => Microsoft.UI.Xaml.Automation.AutomationProperties.GetAutomationId(button));
+            if (buttons.Count != 3) throw new Exception("Expected three candidate position buttons.");
             await core.Call("trigger", new JsonObject { ["keyCode"] = 0xA3, ["modifiers"] = 0 });
-            var original = (await core.Call("settings"))!["candidateCorner"]!.DeepClone();
+            var original = (await core.Call("settings"))!["candidatePosition"]!.DeepClone();
             try
             {
-                Select("topLeft", topLeft: true);
-                var topLeft = await WaitForPosition(left: true);
-                RequireEqualInsets(topLeft: true);
-                Select("bottomRight", topLeft: false);
-                var bottomRight = await WaitForPosition(left: false);
-                RequireEqualInsets(topLeft: false);
-                if (buttons.Count(button => !string.IsNullOrEmpty(Microsoft.UI.Xaml.Automation.AutomationProperties.GetItemStatus(button))) != 1)
-                    throw new Exception("Exactly one screen corner should be selected.");
-                if (bottomRight.X <= topLeft.X || bottomRight.Y <= topLeft.Y)
-                    throw new Exception("The candidate did not move from the top left to the bottom right.");
+                var positions = new List<Windows.Graphics.PointInt32>();
+                foreach (var (value, horizontal) in values)
+                {
+                    buttons[value].IsChecked = true;
+                    positions.Add(await WaitForPosition(horizontal));
+                    if (buttons.Values.Count(button => button.IsChecked == true) != 1)
+                        throw new Exception("Exactly one candidate position should be selected.");
+                }
+                if (!(positions[0].X < positions[1].X && positions[1].X < positions[2].X) || positions.Any(p => p.Y != positions[0].Y))
+                    throw new Exception("The candidate did not move from left to right along the bottom edge.");
             }
             finally
             {
                 await core.Call("dismiss");
-                await window.Save("candidateCorner", original);
+                await window.Save("candidatePosition", original);
             }
 
-            void RequireEqualInsets(bool topLeft)
-            {
-                screen.UpdateLayout();
-                var preview = Descendants(screen).OfType<Microsoft.UI.Xaml.Controls.Border>().Single(border =>
-                    border.Visibility == Microsoft.UI.Xaml.Visibility.Visible &&
-                    Microsoft.UI.Xaml.Automation.AutomationProperties.GetAutomationId(border) == "CandidatePositionPreview");
-                var bounds = preview.TransformToVisual(screen).TransformBounds(
-                    new Windows.Foundation.Rect(0, 0, preview.ActualWidth, preview.ActualHeight));
-                var horizontal = topLeft ? bounds.Left : screen.ActualWidth - bounds.Right;
-                var vertical = topLeft ? bounds.Top : screen.ActualHeight - bounds.Bottom;
-                if (Math.Abs(horizontal - vertical) > 1)
-                    throw new Exception($"Screen preview has unequal insets: {horizontal} and {vertical}.");
-            }
-
-            void Select(string value, bool topLeft)
-            {
-                var button = buttons.Single(button => Microsoft.UI.Xaml.Automation.AutomationProperties.GetAutomationId(button) == value);
-                var horizontal = topLeft ? Microsoft.UI.Xaml.HorizontalAlignment.Left : Microsoft.UI.Xaml.HorizontalAlignment.Right;
-                var vertical = topLeft ? Microsoft.UI.Xaml.VerticalAlignment.Top : Microsoft.UI.Xaml.VerticalAlignment.Bottom;
-                if (button.HorizontalAlignment != horizontal || button.VerticalAlignment != vertical)
-                    throw new Exception("The button is not located at the corresponding screen corner.");
-                var peer = new Microsoft.UI.Xaml.Automation.Peers.ButtonAutomationPeer(button);
-                ((Microsoft.UI.Xaml.Automation.Provider.IInvokeProvider)peer).Invoke();
-            }
-
-            async Task<Windows.Graphics.PointInt32> WaitForPosition(bool left)
+            async Task<Windows.Graphics.PointInt32> WaitForPosition(int horizontal)
             {
                 var deadline = DateTime.UtcNow.AddSeconds(2);
                 while (DateTime.UtcNow < deadline)
@@ -229,12 +203,12 @@ internal static class SmokeTests
                     {
                         var centeredX = (display.Width - size.Width) / 2;
                         var centeredY = (display.Height - size.Height) / 2;
-                        if (left ? dx < centeredX && dy < centeredY : dx > centeredX && dy > centeredY)
-                            return position;
+                        var reached = horizontal switch { < 0 => dx < centeredX, 0 => Math.Abs(dx - centeredX) <= 1, _ => dx > centeredX };
+                        if (reached && dy > centeredY) return position;
                     }
                     await Task.Delay(20);
                 }
-                throw new Exception("The candidate did not reach the selected corner.");
+                throw new Exception("The candidate did not reach the selected bottom position.");
             }
         });
         await Check("Core inserts into the focused Sayso context field and the value persists", async () =>

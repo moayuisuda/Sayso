@@ -50,7 +50,7 @@ public partial class App : Application
             platform.Core = core;
             settings = new SettingsWindow(core, platform);
             candidate = new CandidateWindow(core, settings.L, settings.Show, () => platform.AudioLevel,
-                () => settings.CandidatePlacement);
+                () => settings.CandidateHorizontal);
             hotkeys = new HotkeyMonitor(core, action => settings.Run(action), candidate.Dismiss,
                 arguments.Contains("--smoke-test") ? SmokeTests.InputTag : null);
             settings.Hotkeys = hotkeys;

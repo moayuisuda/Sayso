@@ -50,8 +50,8 @@ fn settings_survive_native_handle_recreation_and_invalid_requests_remain_errors(
         let mut settings = client.call("settings", Value::Null);
         assert!(settings["shortcuts"].as_array().unwrap().iter().any(|s| s["key"]["keyCode"] == 0xA3));
         settings["targetLanguage"] = json!("ja");
-        assert_eq!(settings["candidateCorner"], "bottomRight");
-        settings["candidateCorner"] = json!("topRight");
+        assert_eq!(settings["candidatePosition"], "bottomRight");
+        settings["candidatePosition"] = json!("bottomCenter");
         client.call("updateSettings", settings);
         for request in ["{", r#"{"method":"unknown"}"#, r#"{"method":"updateSettings","args":{}}"#] {
             let request = CString::new(request).unwrap();
@@ -63,11 +63,11 @@ fn settings_survive_native_handle_recreation_and_invalid_requests_remain_errors(
     let client = Client::new(directory.path());
     let settings = client.call("settings", Value::Null);
     assert_eq!(settings["targetLanguage"], "ja");
-    assert_eq!(settings["candidateCorner"], "topRight");
-    let positions = client.call("candidateCorners", Value::Null);
-    assert_eq!(positions.as_array().unwrap().len(), 4);
-    let position = positions.as_array().unwrap().iter().find(|p| p["value"] == settings["candidateCorner"]).unwrap();
-    assert_eq!((position["horizontal"].as_i64(), position["vertical"].as_i64()), (Some(1), Some(-1)));
+    assert_eq!(settings["candidatePosition"], "bottomCenter");
+    let positions = client.call("candidatePositions", Value::Null);
+    assert_eq!(positions.as_array().unwrap().len(), 3);
+    let position = positions.as_array().unwrap().iter().find(|p| p["value"] == settings["candidatePosition"]).unwrap();
+    assert_eq!(position["horizontal"].as_i64(), Some(0));
 }
 
 #[test]

@@ -2,6 +2,7 @@ using Microsoft.UI;
 using Microsoft.UI.Xaml;
 using Microsoft.UI.Xaml.Automation;
 using Microsoft.UI.Xaml.Controls;
+using Microsoft.UI.Xaml.Controls.Primitives;
 using Microsoft.UI.Xaml.Media;
 using Windows.UI;
 
@@ -27,11 +28,12 @@ internal static class Controls
             CheckBox => new[] { "CheckBoxCheckBackgroundFillChecked" },
             Slider => ["SliderThumbBackground", "SliderTrackValueFill"],
             ToggleSwitch => ["ToggleSwitchFillOn"],
+            ToggleButton => ["ToggleButtonBackgroundChecked"],
             _ => throw new ArgumentException("Unsupported accent control.", nameof(control))
         };
         foreach (var key in keys)
             foreach (var state in new[] { "", "PointerOver", "Pressed" }) control.Resources[key + state] = Accent;
-        var foregroundKey = control switch { CheckBox => "CheckBoxCheckGlyphForegroundChecked", ToggleSwitch => "ToggleSwitchKnobFillOn", _ => null };
+        var foregroundKey = control switch { CheckBox => "CheckBoxCheckGlyphForegroundChecked", ToggleSwitch => "ToggleSwitchKnobFillOn", ToggleButton => "ToggleButtonForegroundChecked", _ => null };
         if (foregroundKey is not null)
             foreach (var state in new[] { "", "PointerOver", "Pressed" }) control.Resources[foregroundKey + state] = Application.Current.Resources["SaysoOnAccent"];
         return control;
@@ -119,6 +121,30 @@ internal static class Controls
         combo.SelectedItem = combo.Items.Cast<ComboBoxItem>().FirstOrDefault(i => (string)i.Tag == selected);
         combo.SelectionChanged += (_, _) => { if (combo.SelectedItem is ComboBoxItem item) changed((string)item.Tag); };
         return combo;
+    }
+    /// <summary>按钮组形式的单选，选项少时一眼看全；每个按钮的 AutomationId 为选项值。</summary>
+    public static StackPanel Segmented(IEnumerable<(string Value, string Title)> options, string selected, Action<string> changed)
+    {
+        var panel = new StackPanel { Orientation = Orientation.Horizontal, Spacing = 4, HorizontalAlignment = HorizontalAlignment.Left };
+        var buttons = new List<ToggleButton>();
+        foreach (var (value, title) in options)
+        {
+            var button = Accented(new ToggleButton { Content = title, IsChecked = value == selected, CornerRadius = new(6), FontSize = 12 });
+            AutomationProperties.SetAutomationId(button, value);
+            // 先更新 selected 再取消其他按钮，被取消的旧选项不会把自己重新选中。
+            button.Checked += (_, _) =>
+            {
+                if (value == selected) return;
+                selected = value;
+                foreach (var other in buttons) if (other != button) other.IsChecked = false;
+                changed(value);
+            };
+            // 单选不能取消当前选项。
+            button.Unchecked += (_, _) => { if (value == selected) button.IsChecked = true; };
+            buttons.Add(button);
+            panel.Children.Add(button);
+        }
+        return panel;
     }
     public static Button IconButton(string glyph, string label, Action action)
     {

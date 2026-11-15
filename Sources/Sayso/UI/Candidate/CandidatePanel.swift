@@ -12,9 +12,9 @@ final class CandidatePanel {
     }
 
     private let panel: NSPanel
-    private let edgeMargin: CGFloat = 72
+    private let edgeMargin: CGFloat = 16
     private let model: CoreModel
-    private let positions = candidateCorners()
+    private let positions = candidatePositions()
     private var resizeObserver: NSObjectProtocol?
     private let core: Core
     private var dismissal: DismissalContext?
@@ -133,10 +133,15 @@ final class CandidatePanel {
         if panel.isVisible { reposition() }
     }
 
+    /// 在剩余长度内按对齐取偏移：-1 靠起始边、0 居中、1 靠末端边，靠边时留出 edgeMargin。
     private func alignedOffset(_ available: CGFloat, _ alignment: Int8) -> CGFloat {
         let available = max(0, available)
         let inset = min(edgeMargin, available / 2)
-        return alignment < 0 ? inset : available - inset
+        switch alignment {
+        case ..<0: return inset
+        case 0: return available / 2
+        default: return available - inset
+        }
     }
 
     private func reposition() {
@@ -144,11 +149,11 @@ final class CandidatePanel {
         guard let screen = NSScreen.screens.first(where: { $0.frame.contains(mouse) }) ?? NSScreen.main else { return }
         let size = panel.frame.size
         let visible = screen.visibleFrame
-        guard let position = positions.first(where: { $0.value == model.settings.candidateCorner }) else { return }
+        guard let position = positions.first(where: { $0.value == model.settings.candidatePosition }) else { return }
         panel.setFrameOrigin(NSPoint(
             x: (visible.minX + alignedOffset(visible.width - size.width, position.horizontal)).rounded(),
-            // AppKit 从屏幕底部向上计数。
-            y: (visible.minY + alignedOffset(visible.height - size.height, -position.vertical)).rounded()
+            // AppKit 从屏幕底部向上计数，靠底即靠起始边。
+            y: (visible.minY + alignedOffset(visible.height - size.height, -1)).rounded()
         ))
     }
 }

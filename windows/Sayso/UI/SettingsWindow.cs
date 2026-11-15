@@ -21,28 +21,18 @@ internal sealed partial class SettingsWindow : Window
     private readonly TextBlock status = Controls.OptionalText(size: 11, opacity: 0.6);
     private JsonArray extensions = [];
     private JsonArray languages = [];
-    private JsonArray candidateCorners = [];
-    private CandidatePositionPicker? candidatePositionPicker;
+    private JsonArray candidatePositions = [];
     private JsonArray asrSources = [];
     private JsonArray providers = [];
-    private JsonNode settings = null!;
-    internal JsonNode Settings
-    {
-        get => settings;
-        private set
-        {
-            settings = value;
-            candidatePositionPicker?.Select(CandidatePositionValue);
-        }
-    }
-    private string CandidatePositionValue => Settings["candidateCorner"]!.GetValue<string>();
-    internal (int Horizontal, int Vertical) CandidatePlacement
+    internal JsonNode Settings { get; private set; } = null!;
+    /// <summary>候选框底部的水平位置：-1 靠左、0 居中、1 靠右。</summary>
+    internal int CandidateHorizontal
     {
         get
         {
-            var selectedPosition = CandidatePositionValue;
-            var option = candidateCorners.First(item => item!["value"]!.GetValue<string>() == selectedPosition)!;
-            return (option["horizontal"]!.GetValue<int>(), option["vertical"]!.GetValue<int>());
+            var selectedPosition = Settings["candidatePosition"]!.GetValue<string>();
+            var option = candidatePositions.First(item => item!["value"]!.GetValue<string>() == selectedPosition)!;
+            return option["horizontal"]!.GetValue<int>();
         }
     }
     /// 已发现的比当前版本新的正式版（version、url）；尚未发现时为 null。
@@ -135,7 +125,7 @@ internal sealed partial class SettingsWindow : Window
     {
         Settings = (await core!.Call("settings"))!;
         languages = (await core.Call("languages"))!.AsArray();
-        candidateCorners = (await core.Call("candidateCorners"))!.AsArray();
+        candidatePositions = (await core.Call("candidatePositions"))!.AsArray();
         asrSources = (await core.Call("asrSources"))!.AsArray();
         providers = (await core.Call("providers"))!.AsArray();
         extensions = (await core.Call("extensions"))!.AsArray();
@@ -158,7 +148,7 @@ internal sealed partial class SettingsWindow : Window
         if (previousLanguage != Settings["nativeLanguage"]!.GetValue<string>())
         {
             // 候选框位置、扩展与识别来源的文案随本地语言变化。
-            candidateCorners = (await core.Call("candidateCorners"))!.AsArray();
+            candidatePositions = (await core.Call("candidatePositions"))!.AsArray();
             extensions = (await core.Call("extensions"))!.AsArray();
             asrSources = (await core.Call("asrSources"))!.AsArray();
             BuildTabs();

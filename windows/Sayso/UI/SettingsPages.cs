@@ -31,10 +31,6 @@ internal sealed partial class SettingsWindow
 
     private UIElement GeneralPage()
     {
-        var positionPicker = new CandidatePositionPicker(candidateCorners, L("已选中", "Selected"),
-            value => Run(() => Save("candidateCorner", JsonValue.Create(value))));
-        candidatePositionPicker = positionPicker;
-        positionPicker.Select(CandidatePositionValue);
         var autoSpeak = Controls.Accented(new CheckBox { Content = L("生成翻译块时自动朗读", "Read translated blocks aloud"), IsChecked = Settings["autoSpeak"]!.GetValue<bool>(), FontSize = 13 });
         autoSpeak.Click += (_, _) => Run(() => Save("autoSpeak", JsonValue.Create(autoSpeak.IsChecked == true)));
         var rate = Controls.Accented(new Slider { Minimum = 0.3, Maximum = 0.6, Value = Settings["speechRate"]!.GetValue<double>(), Width = 180, StepFrequency = 0.01 });
@@ -48,7 +44,8 @@ internal sealed partial class SettingsWindow
                 Controls.Row(L("语音触发方式", "Voice shortcut mode"), SettingChoice("hotkeyStyle",
                     [("hold", L("按住说话", "Hold to talk")), ("toggle", L("按一下开始 / 结束", "Press to toggle"))]))),
             Controls.Section(L("候选框", "Candidate window"),
-                Controls.Row(L("窗口位置", "Window position"), positionPicker)),
+                Controls.Row(L("窗口位置", "Window position"), Controls.Segmented(Options(candidatePositions),
+                    Settings["candidatePosition"]!.GetValue<string>(), value => Run(() => Save("candidatePosition", JsonValue.Create(value)))))),
             Controls.Section(L("朗读", "Pronunciation"),
                 Controls.Row(L("自动朗读", "Read aloud"), autoSpeak),
                 Controls.Row(L("系统语音", "System voices"), Controls.Button(L("管理朗读语音", "Manage voices"), () => WindowsPlatform.Open("ms-settings:speech")),

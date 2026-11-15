@@ -17,7 +17,7 @@ internal sealed class CandidateWindow : Window
     private readonly CoreClient core;
     private readonly Func<string, string, string> localize;
     private readonly Action openSettings;
-    private readonly Func<(int Horizontal, int Vertical)> placement;
+    private readonly Func<int> placement;
     private readonly RecordingGlow recordingGlow;
     private readonly CandidateDismissMonitor dismissMonitor;
     private string lastKind = "idle";
@@ -37,7 +37,7 @@ internal sealed class CandidateWindow : Window
     internal bool RecordingGlowAnimating => recordingGlow.IsAnimating;
 
     public CandidateWindow(CoreClient core, Func<string, string, string> localize, Action openSettings,
-        Func<float> readAudioLevel, Func<(int Horizontal, int Vertical)> placement)
+        Func<float> readAudioLevel, Func<int> placement)
     {
         this.core = core;
         this.localize = localize;
@@ -216,11 +216,12 @@ internal sealed class CandidateWindow : Window
         if (visible) Place();
     }
 
+    /// <summary>在剩余长度内按对齐取偏移：-1 靠起始边、0 居中、1 靠末端边，靠边时留出 margin。</summary>
     private static int AlignedOffset(int available, int alignment, int margin)
     {
         available = Math.Max(0, available);
         var inset = Math.Min(margin, available / 2);
-        return alignment < 0 ? inset : available - inset;
+        return alignment switch { < 0 => inset, 0 => available / 2, _ => available - inset };
     }
 
     private void Place()
@@ -237,11 +238,11 @@ internal sealed class CandidateWindow : Window
             if (AppWindow.Size.Width != size.Width || AppWindow.Size.Height != size.Height) AppWindow.Resize(size);
             var foreground = NativeMethods.GetForegroundWindow();
             var area = DisplayArea.GetFromWindowId(Microsoft.UI.Win32Interop.GetWindowIdFromWindow(foreground), DisplayAreaFallback.Primary).WorkArea;
-            var (horizontal, vertical) = placement();
-            var margin = (int)(40 * scale);
+            var margin = (int)(16 * scale);
+            // 候选框始终在底部，只按设置调整水平位置。
             AppWindow.Move(new PointInt32(
-                area.X + AlignedOffset(area.Width - size.Width, horizontal, margin),
-                area.Y + AlignedOffset(area.Height - size.Height, vertical, margin)));
+                area.X + AlignedOffset(area.Width - size.Width, placement(), margin),
+                area.Y + AlignedOffset(area.Height - size.Height, 1, margin)));
         }
         finally { placing = false; }
     }

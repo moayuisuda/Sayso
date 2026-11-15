@@ -56,7 +56,12 @@ struct GeneralSettingsView: View {
 
             SettingsSection(L("候选框", "Candidate window")) {
                 SettingsRow(title: L("窗口位置", "Window position")) {
-                    CandidatePositionPicker(positions: candidateCorners(), selection: model.binding(\.candidateCorner))
+                    Picker(L("窗口位置", "Window position"), selection: model.binding(\.candidatePosition)) {
+                        ForEach(candidatePositions(), id: \.value) { Text($0.title).tag($0.value) }
+                    }
+                    .pickerStyle(.segmented)
+                    .labelsHidden()
+                    .fixedSize()
                 }
             }
 

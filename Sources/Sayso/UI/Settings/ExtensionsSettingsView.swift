@@ -86,6 +86,7 @@ struct ExtensionsSettingsView: View {
                 }
                 .padding(8)
             }
+            // 侧栏较窄：主操作带文字，次要操作只显示图标，名称放在悬停提示与读屏标签里。
             ActionBar {
                 Button {
                     packages.chooseAndInstall()
@@ -93,21 +94,26 @@ struct ExtensionsSettingsView: View {
                     Label(L("安装扩展…", "Install…"), systemImage: "plus")
                 }
                 .buttonStyle(.chip)
-                Button {
-                    NSWorkspace.shared.open(URL(filePath: model.core.extensionsDirectory()))
-                } label: {
-                    Label(L("打开文件夹", "Open Folder"), systemImage: "folder")
-                }
-                .buttonStyle(.chip)
             } trailing: {
-                Button {
-                    model.core.reloadExtensions()
-                } label: {
-                    Label(L("重新加载", "Reload"), systemImage: "arrow.clockwise")
+                HStack(spacing: 6) {
+                    iconButton(L("打开文件夹", "Open Folder"), systemImage: "folder") {
+                        NSWorkspace.shared.open(URL(filePath: model.core.extensionsDirectory()))
+                    }
+                    iconButton(L("重新加载", "Reload"), systemImage: "arrow.clockwise") {
+                        model.core.reloadExtensions()
+                    }
                 }
-                .buttonStyle(.chip)
             }
         }
+    }
+
+    private func iconButton(_ title: String, systemImage: String, action: @escaping () -> Void) -> some View {
+        Button(action: action) {
+            Label(title, systemImage: systemImage)
+                .labelStyle(.iconOnly)
+        }
+        .buttonStyle(.chip)
+        .help(title)
     }
 }
 

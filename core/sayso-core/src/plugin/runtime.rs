@@ -11,7 +11,7 @@ use rquickjs::{AsyncContext, AsyncRuntime, Ctx, Exception, Function, Module, Obj
 use super::shell;
 use super::{Host, Instruction, Plugin, PluginSource, RunResult, RunStatus};
 use crate::error::CoreError;
-use crate::protocol::{Capability, Delivery, Event, EventType, LanguagePair, Manifest};
+use crate::protocol::{Capability, Event, EventType, LanguagePair, Manifest};
 
 const PRELUDE: &str = include_str!("prelude.js");
 const MEMORY_LIMIT: usize = 64 * 1024 * 1024;
@@ -34,16 +34,16 @@ pub async fn run(plugin: &Plugin, event: &Event, host: Arc<dyn Host>) -> RunResu
         shell: shell.clone(),
         deadline,
     });
-    let timeout = plugin.manifest.timeout();
-    let status = match tokio::time::timeout(timeout, execute(plugin, event, invocation.clone(), deadline)).await {
-        Ok(Ok(())) => RunStatus::Succeeded,
-        Ok(Err(Failure::TimedOut)) | Err(_) => RunStatus::TimedOut,
-        Ok(Err(Failure::Error(message))) => RunStatus::Failed { message },
+    let outcome = tokio::time::timeout(plugin.manifest.timeout(), execute(plugin, event, invocation.clone(), deadline));
+    let (status, output) = match outcome.await {
+        Ok(Ok(output)) => (RunStatus::Succeeded, output),
+        Ok(Err(Failure::TimedOut)) | Err(_) => (RunStatus::TimedOut, None),
+        Ok(Err(Failure::Error(message))) => (RunStatus::Failed { message }, None),
     };
     shell.close().await;
     let warnings = invocation.warnings.lock().unwrap().clone();
     let log = invocation.log.lock().unwrap().clone();
-    RunResult { extension_id: plugin.manifest.id.clone(), status, warnings, log }
+    RunResult { extension_id: plugin.manifest.id.clone(), status, output, warnings, log }
 }
 
 enum Failure {
@@ -56,7 +56,7 @@ async fn execute(
     event: &Event,
     invocation: Arc<Invocation>,
     deadline: Instant,
-) -> Result<(), Failure> {
+) -> Result<Option<String>, Failure> {
     let runtime_error = |error: rquickjs::Error| Failure::Error(error.to_string());
     let runtime = AsyncRuntime::new().map_err(runtime_error)?;
     runtime.set_memory_limit(MEMORY_LIMIT).await;
@@ -89,7 +89,7 @@ async fn execute(
     let handler = event.event_type().name();
     let event_json = event.to_json().to_string();
 
-    let outcome: Result<(), String> = context
+    let outcome: Result<Option<String>, String> = context
         .async_with(async |ctx| {
             let result = async {
                 install(&ctx, invocation.clone())?;
@@ -98,20 +98,35 @@ async fn execute(
                 loaded.into_future::<()>().await?;
                 let Ok(function) = module.get::<_, Function>(handler) else {
                     invocation.warn(format!("main module exports no `{handler}` handler"));
-                    return Ok(());
+                    return Ok(None);
                 };
                 let returned: Value = function.call((ctx.json_parse(event_json)?,))?;
-                if let Some(promise) = returned.into_promise() {
-                    promise.into_future::<()>().await?;
+                let returned = if let Some(promise) = returned.as_promise() {
+                    promise.clone().into_future::<Value>().await?
+                } else {
+                    returned
+                };
+                if handler != "input" || returned.is_undefined() {
+                    return Ok(None);
                 }
-                Ok::<_, rquickjs::Error>(())
+                if !invocation.manifest.grants(Capability::Transform) {
+                    return Err(throw(&ctx, CoreError::CapabilityNotGranted(Capability::Transform)));
+                }
+                let output = returned
+                    .as_string()
+                    .ok_or_else(|| Exception::throw_type(&ctx, "input must return a non-empty string or undefined"))?
+                    .to_string()?;
+                if output.trim().is_empty() {
+                    return Err(Exception::throw_type(&ctx, "input must return a non-empty string or undefined"));
+                }
+                Ok(Some(output))
             }
             .await;
             result.map_err(|error| describe(&ctx, error, &invocation))
         })
         .await;
     match outcome {
-        Ok(()) => Ok(()),
+        Ok(output) => Ok(output),
         Err(_) if Instant::now() >= deadline => Err(Failure::TimedOut),
         Err(message) => Err(Failure::Error(message)),
     }
@@ -217,8 +232,7 @@ fn install<'js>(ctx: &Ctx<'js>, invocation: Arc<Invocation>) -> rquickjs::Result
         )?,
     )?;
 
-    let inserter = invocation;
-    let runner = inserter.clone();
+    let runner = invocation;
     native.set(
         "shell",
         Function::new(
@@ -226,16 +240,6 @@ fn install<'js>(ctx: &Ctx<'js>, invocation: Arc<Invocation>) -> rquickjs::Result
             Async(move |ctx: Ctx<'js>, script: String, options: String| {
                 let invocation = runner.clone();
                 async move { invocation.shell(script, &options).await.map_err(|error| throw(&ctx, error)) }
-            }),
-        )?,
-    )?;
-    native.set(
-        "insert",
-        Function::new(
-            ctx.clone(),
-            Async(move |ctx: Ctx<'js>, text: String| {
-                let invocation = inserter.clone();
-                async move { invocation.insert(text).await.map_err(|error| throw(&ctx, error)) }
             }),
         )?,
     )?;
@@ -312,19 +316,6 @@ impl Invocation {
     async fn complete(&self, system: String, user: String) -> Result<String, CoreError> {
         self.require(Capability::Llm)?;
         self.host.complete(system, user).await
-    }
-
-    /// 写入其他应用必须由用户触发：只能在处理命令时使用。
-    async fn insert(&self, text: String) -> Result<String, CoreError> {
-        self.require(Capability::Insert)?;
-        if self.event_type != EventType::Input {
-            return Err(CoreError::InsertOutsideInput);
-        }
-        Ok(match self.host.insert(text).await? {
-            Delivery::Inserted => "inserted",
-            Delivery::CopiedToClipboard => "copiedToClipboard",
-        }
-        .into())
     }
 
     fn records(&self, collection: &str) -> Result<String, CoreError> {

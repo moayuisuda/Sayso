@@ -1,10 +1,10 @@
 {
-  "schemaVersion": 4,
+  "schemaVersion": 5,
   "id": "sayso.dictation",
   "name": "混说翻译 / Mixed-language Translation",
   "description": "用目标语言说话，不会的词用母语说，翻译后写入当前应用 / Speak your target language, say unknown words in your native language, and type the translated sentence",
   "main": "main.js",
   "timeoutSeconds": 40,
   "events": ["input"],
-  "capabilities": ["blocks", "publish", "insert", "llm"]
+  "capabilities": ["blocks", "publish", "transform", "llm"]
 }

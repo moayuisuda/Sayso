@@ -96,14 +96,18 @@ impl Extensions {
 
     /// 已启用、订阅了该事件且在投递范围内的扩展。
     pub fn recipients(&self, settings: &Settings, event_type: EventType, route: &Route) -> Vec<Plugin> {
-        self.enabled(settings)
+        let mut recipients: Vec<_> = self.enabled(settings)
             .filter(|plugin| plugin.manifest.events.contains(&event_type))
             .filter(|plugin| match route {
                 Route::Target { extension_id, .. } => plugin.id() == extension_id,
                 Route::Republished { by } => plugin.id() != by,
             })
             .cloned()
-            .collect()
+            .collect();
+        if event_type == EventType::Input {
+            recipients.sort_by_key(|plugin| settings.enabled_extensions.iter().position(|id| id == plugin.id()));
+        }
+        recipients
     }
 
     pub fn infos(&self, settings: &Settings) -> Vec<ExtensionInfo> {
@@ -126,7 +130,10 @@ impl Extensions {
             .iter()
             .filter_map(|event| match broadcaster_of(*event) {
                 Some(capability) => {
-                    let extensions = self.enabled_names(settings, manifest, |other| other.grants(capability));
+                    let mut extensions = self.enabled_names(settings, manifest, |other| other.grants(capability));
+                    if *event == EventType::Inserted {
+                        extensions.insert(0, "Sayso".into());
+                    }
                     peer_link(*event, tr("来自：", "From: "), extensions)
                 }
                 None => Some(HookLink {
@@ -200,10 +207,8 @@ pub fn capability_description(capability: Capability) -> String {
     match capability {
         Capability::Blocks => tr("在候选框中显示内容", "Show content in the candidate box"),
         Capability::Store => tr("保存自己的数据并拥有独立页签", "Keep its own data and own a tab"),
-        Capability::Insert => tr(
-            "点击它的按钮或由它处理输入时，把文字写入当前应用",
-            "Type text into the current app from its button or while processing your input",
-        ),
+        Capability::Insert => tr("点击它的按钮时，把文字写入当前应用", "Insert text on button click"),
+        Capability::Transform => tr("处理语音或划词文本并修改流程输出", "Change the text from speech or selection"),
         Capability::Llm => tr("使用你配置的翻译模型", "Use the translation model you configured"),
         Capability::Publish => tr("向其他扩展广播事件", "Broadcast events to other extensions"),
         Capability::Fs => tr("读写你电脑上的文件", "Read and write files on your computer"),

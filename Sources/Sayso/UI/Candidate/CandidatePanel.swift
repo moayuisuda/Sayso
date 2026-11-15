@@ -2,7 +2,7 @@ import AppKit
 import SaysoCore
 import SwiftUI
 
-/// 屏幕底部居中的悬浮候选框。不会成为 key window，因此不抢前台应用的焦点。
+/// 可在当前屏幕定位的悬浮候选框。不会成为 key window，因此不抢前台应用的焦点。
 @MainActor
 final class CandidatePanel {
     private struct DismissalContext: Sendable {
@@ -12,7 +12,9 @@ final class CandidatePanel {
     }
 
     private let panel: NSPanel
-    private let bottomOffset: CGFloat = 72
+    private let edgeMargin: CGFloat = 72
+    private let model: CoreModel
+    private let positions = candidateCorners()
     private var resizeObserver: NSObjectProtocol?
     private let core: Core
     private var dismissal: DismissalContext?
@@ -21,6 +23,7 @@ final class CandidatePanel {
     private var activationObserver: NSKeyValueObservation?
 
     init(model: CoreModel) {
+        self.model = model
         core = model.core
         panel = NonActivatingPanel(
             contentRect: NSRect(x: 0, y: 0, width: 320, height: 60),
@@ -36,7 +39,7 @@ final class CandidatePanel {
         panel.hidesOnDeactivate = false
         panel.collectionBehavior = [.canJoinAllSpaces, .fullScreenAuxiliary]
 
-        // 面板尺寸跟随 SwiftUI 内容变化，变化后重新居中。
+        // 面板尺寸跟随 SwiftUI 内容变化，变化后按所选位置重新摆放。
         let host = NSHostingController(rootView: CandidateView(model: model))
         host.sizingOptions = [.preferredContentSize]
         panel.contentViewController = host
@@ -126,14 +129,26 @@ final class CandidatePanel {
         activationObserver = nil
     }
 
+    func refreshPosition() {
+        if panel.isVisible { reposition() }
+    }
+
+    private func alignedOffset(_ available: CGFloat, _ alignment: Int8) -> CGFloat {
+        let available = max(0, available)
+        let inset = min(edgeMargin, available / 2)
+        return alignment < 0 ? inset : available - inset
+    }
+
     private func reposition() {
         let mouse = NSEvent.mouseLocation
         guard let screen = NSScreen.screens.first(where: { $0.frame.contains(mouse) }) ?? NSScreen.main else { return }
         let size = panel.frame.size
         let visible = screen.visibleFrame
+        guard let position = positions.first(where: { $0.value == model.settings.candidateCorner }) else { return }
         panel.setFrameOrigin(NSPoint(
-            x: (visible.midX - size.width / 2).rounded(),
-            y: (visible.minY + bottomOffset).rounded()
+            x: (visible.minX + alignedOffset(visible.width - size.width, position.horizontal)).rounded(),
+            // AppKit 从屏幕底部向上计数。
+            y: (visible.minY + alignedOffset(visible.height - size.height, -position.vertical)).rounded()
         ))
     }
 }

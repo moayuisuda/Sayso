@@ -8,8 +8,10 @@ pub enum Capability {
     Blocks,
     /// 拥有自己的数据集合与页签。
     Store,
-    /// 把文字写入前台应用：用户点击块上的 `insert` 操作时，或处理用户触发的命令时（`sayso.insert`）。
+    /// 用户点击块上的 `insert` 操作时，把文字写入前台应用。
     Insert,
+    /// 处理 `input` 时返回文本，交给后续中间件及 Sayso。
+    Transform,
     /// 使用用户配置的翻译模型（`sayso.llm`），扩展不需要自带 API Key。
     Llm,
     /// 向其他扩展广播事件。
@@ -28,6 +30,7 @@ impl Capability {
             Self::Blocks => "blocks",
             Self::Store => "store",
             Self::Insert => "insert",
+            Self::Transform => "transform",
             Self::Llm => "llm",
             Self::Publish => "publish",
             Self::Fs => "fs",

@@ -17,6 +17,7 @@ internal sealed class CandidateWindow : Window
     private readonly CoreClient core;
     private readonly Func<string, string, string> localize;
     private readonly Action openSettings;
+    private readonly Func<(int Horizontal, int Vertical)> placement;
     private readonly RecordingGlow recordingGlow;
     private readonly CandidateDismissMonitor dismissMonitor;
     private string lastKind = "idle";
@@ -35,11 +36,13 @@ internal sealed class CandidateWindow : Window
     internal UIElement? RenderedContent => root.Child;
     internal bool RecordingGlowAnimating => recordingGlow.IsAnimating;
 
-    public CandidateWindow(CoreClient core, Func<string, string, string> localize, Action openSettings, Func<float> readAudioLevel)
+    public CandidateWindow(CoreClient core, Func<string, string, string> localize, Action openSettings,
+        Func<float> readAudioLevel, Func<(int Horizontal, int Vertical)> placement)
     {
         this.core = core;
         this.localize = localize;
         this.openSettings = openSettings;
+        this.placement = placement;
         Title = "Sayso · 候选框";
         SystemBackdrop = new DesktopAcrylicBackdrop();
         // 流光叠在内容之上且独立于内容：会话内容随识别文本重建时，流光持续流动。
@@ -208,6 +211,18 @@ internal sealed class CandidateWindow : Window
         AppWindow.Show(false);
     }
 
+    internal void RefreshPosition()
+    {
+        if (visible) Place();
+    }
+
+    private static int AlignedOffset(int available, int alignment, int margin)
+    {
+        available = Math.Max(0, available);
+        var inset = Math.Min(margin, available / 2);
+        return alignment < 0 ? inset : available - inset;
+    }
+
     private void Place()
     {
         if (placing) return;
@@ -222,7 +237,11 @@ internal sealed class CandidateWindow : Window
             if (AppWindow.Size.Width != size.Width || AppWindow.Size.Height != size.Height) AppWindow.Resize(size);
             var foreground = NativeMethods.GetForegroundWindow();
             var area = DisplayArea.GetFromWindowId(Microsoft.UI.Win32Interop.GetWindowIdFromWindow(foreground), DisplayAreaFallback.Primary).WorkArea;
-            AppWindow.Move(new PointInt32(area.X + (area.Width - AppWindow.Size.Width) / 2, area.Y + area.Height - AppWindow.Size.Height - (int)(40 * scale)));
+            var (horizontal, vertical) = placement();
+            var margin = (int)(40 * scale);
+            AppWindow.Move(new PointInt32(
+                area.X + AlignedOffset(area.Width - size.Width, horizontal, margin),
+                area.Y + AlignedOffset(area.Height - size.Height, vertical, margin)));
         }
         finally { placing = false; }
     }

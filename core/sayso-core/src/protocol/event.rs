@@ -9,7 +9,7 @@ use crate::store::StoreRecord;
 pub enum EventType {
     /// 用户点击了该扩展块上的 invoke 操作（定向）。
     Action,
-    /// hook：输入已准备好，交给后处理扩展处理（由 Sayso 广播）。
+    /// 输入就绪，依次交给已启用的中间件处理。
     Input,
     /// hook：后处理扩展翻译完毕（由后处理扩展广播）。
     Translated,
@@ -50,7 +50,7 @@ pub enum InputSource {
 /// Sayso 广播的统一输入，语音和选区都提供文本。
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub struct Input {
-    /// 已去除首尾空白，非空。
+    /// 当前处理到的非空文本。
     pub text: String,
     pub via: InputSource,
 }
@@ -110,7 +110,7 @@ pub enum Payload {
         text: String,
         destination: Option<AppInfo>,
         delivery: Delivery,
-        /// 发出写入的扩展。
+        /// 写入来源：Sayso 的语音流程或用户点击的扩展按钮。
         by: String,
     },
     Focus {
@@ -143,7 +143,7 @@ pub enum ActionOrigin {
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub struct Translation {
     pub input: Input,
-    /// 译文：混说翻译为写入的整句，互译为译文。
+    /// 此次翻译的输出，后续中间件仍可处理文本。
     pub output: String,
     /// 没有需要翻译的片段（如纯目标语言输入）或译为第三种语言时为空。
     pub pairs: Vec<TranslationPair>,

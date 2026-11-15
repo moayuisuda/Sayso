@@ -58,7 +58,7 @@ final class AppModel {
             case .dismiss(let id): core.dismissSurface(surfaceId: id)
             }
         }
-        syncHotkeysWithSettings()
+        syncInputSettings()
     }
 
     func launch() {
@@ -73,13 +73,14 @@ final class AppModel {
         }
     }
 
-    /// 将 Sayso 的输入快捷键同步到监听器。
-    private func syncHotkeysWithSettings() {
+    /// 同步输入快捷键和候选框位置。
+    private func syncInputSettings() {
         withObservationTracking {
             hotkeys.style = model.settings.hotkeyStyle
             hotkeys.shortcuts = Set(model.core.activeShortcuts())
+            panel.refreshPosition()
         } onChange: { [weak self] in
-            Task { @MainActor in self?.syncHotkeysWithSettings() }
+            Task { @MainActor in self?.syncInputSettings() }
         }
     }
 }

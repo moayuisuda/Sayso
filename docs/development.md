@@ -9,7 +9,7 @@ core/                     Rust core（macOS 与 Windows 共用）
 ├── sayso-core/src/
 │   ├── protocol/           扩展协议：语言、块、操作、事件、清单与页签模板
 │   ├── plugin/             JS 扩展运行时（QuickJS）、`sayso.*` API、扩展目录加载
-│   ├── session/            会话状态机：输入快捷键 → 录音识别或读取选区 → 广播 input；候选框内容、停留时长、块操作
+│   ├── session/            会话状态机：识别语音或读取选区 → input 中间件链 → 写入语音或展示划词；候选框生命周期、块操作
 │   ├── asr/                识别来源注册表；火山引擎 / 千问 / Soniox（流式 WebSocket）、OpenAI 兼容 URL（本地或云端，批量）
 │   ├── llm/                OpenAI 兼容 / Anthropic 客户端、服务预设、思考强度、连接预热
 │   ├── extensions.rs       扩展启停、事件订阅和广播对象

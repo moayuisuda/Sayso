@@ -1,32 +1,25 @@
-# Sayso 扩展协议（schemaVersion 4）
+# Sayso 扩展协议（schemaVersion 5）
 
 ## 0. 设计原则
 
-1. **一切皆扩展。** Sayso 只负责把语音、选中文本变成统一的文本输入，通过同一个 `input` 事件广播给所有已启用的订阅者。
-   内置的「混说翻译」「互译」「生词本」与第三方扩展是同一种 JS 扩展，只是随应用发布（源码在 `core/plugins/`），
-   它们使用宿主能力（调用翻译模型、写入前台应用）也只通过 `sayso.*` API。
-2. **后处理与事件式。** 扩展按做的事分两种，内置扩展与第三方扩展都可以是任一种：
-   - 混说翻译、互译和其他文本处理扩展订阅 `input`。扩展用 `event.input.via` 区分语音与划词，并可以在处理后广播 `translated`。
-   - 生词本等扩展订阅 `translated`，附加按钮后以 `action` 接收点击。内置和第三方扩展使用相同的事件与能力。
+1. **Sayso 管理输入与交付。** 语音识别和读取选区向同一条流程提供文本。中间件依启用顺序运行，每一步可以返回修改后的文本。
+   流程结束后，Sayso 将语音结果写入触发时的前台应用，或在候选框展示划词结果。
+2. **内置与第三方共用扩展协议。** 混说翻译、互译和其他文本处理扩展实现 `input`。生词本等事件订阅者可以在翻译后附加按钮，并在用户点击后处理 `action`。
 
 ## 1. 概念总览
 
-```
- 快捷键 ─▶ 输入（语音或选区）─▶ 广播 input ─▶ 已启用的订阅者（混说翻译 / 互译 / 第三方）
-                     │                          │
-                     ▼ hook: input              ▼ hook: translated → inserted
-               ┌──────────── 事件式扩展（生词本、第三方）────────────┐
-               │  订阅 hook ─▶ sayso.blocks 加内容，或在词条卡片上附加按钮 │
-               │  用户点击按钮 ─▶ action ─▶ sayso.store / llm / fs …  │
-               └──────────────────────────────────────────────────────┘
-   候选框（各来源的块） ◀──── 渲染 ──── 扩展页签（按模板渲染扩展数据）
+```text
+快捷键 → 识别语音 / 读取选区 → input 中间件链 → Sayso 交付
+                                 │                ├─ 语音 → 写入 → inserted
+                                 │                └─ 划词 → 候选框
+                                 └─ translated → 生词本等订阅者
 ```
 
 | 概念 | 说明 |
 | --- | --- |
-| **来源（source）** | 往候选框提供块的一方。Sayso 自身只有 `sayso.app`（应用状态提示）；每个启用的扩展也是一个来源 |
+| **来源（source）** | 往候选框提供块的一方。Sayso 自身只有 `sayso.app`（应用结果与状态提示）；每个启用的扩展也是一个来源 |
 | **快捷键（shortcut）** | 启动 Sayso 的语音输入或读取前台应用的选区 |
-| **hook** | 触发流程中各环节的广播事件：`input`（输入就绪）、`translated`（翻译完毕）、`inserted`（已写入），事件式扩展订阅它们 |
+| **hook** | `translated`（翻译完毕）、`inserted`（投递成功）、`focus`（切换应用）等广播事件 |
 | **块（block）** | 候选框与页签里的最小界面单元，类型来自固定组件库 |
 | **操作（action）** | 块上的可点击行为：朗读、复制、打开链接、写入、回调扩展、删除记录 |
 | **数据（store）** | 每个扩展独有的记录集合，由 Sayso 托管存储 |
@@ -39,7 +32,7 @@
 
 ```json
 {
-  "schemaVersion": 4,
+  "schemaVersion": 5,
   "id": "com.example.favorites",
   "name": "收藏夹",
   "description": "在翻译出的单词卡片上显示收藏按钮，收藏的词显示在「收藏」页签",
@@ -64,7 +57,7 @@
 
 | 字段 | 必填 | 说明 |
 | --- | --- | --- |
-| `schemaVersion` | 是 | 协议版本，当前为 `4`；其他版本的扩展在扩展页显示为加载失败 |
+| `schemaVersion` | 是 | 协议版本，当前为 `5`，其他版本的扩展在扩展页显示为加载失败 |
 | `id` | 是 | 全局唯一的反向域名标识，也是启停状态与数据目录的键；`sayso.` 前缀保留给内置扩展 |
 | `name` / `description` | 是 / 否 | 扩展管理页显示 |
 | `main` | 是 | 入口 ES 模块，相对扩展目录 |
@@ -77,7 +70,8 @@
 | --- | --- |
 | `blocks` | `sayso.blocks.*`，向候选框添加块，或在其他来源的块上附加按钮 |
 | `store` | `sayso.store.*`，拥有自己的数据集合与页签；页签条目可用 `delete` 操作 |
-| `insert` | 把文字写入前台应用：块上的 `insert` 操作（用户点击后），或后处理扩展处理 `input` 时调用 `sayso.insert` |
+| `insert` | 用户点击块上的 `insert` 操作时写入前台应用 |
+| `transform` | 处理 `input` 时返回非空文本，替换流程中的当前文本 |
 | `llm` | `sayso.llm`，用用户在设置中配置的翻译模型补全，扩展不需要自带 API Key |
 | `publish` | `sayso.publish`，处理 `input` 时广播 `translated` hook |
 | `fs` | `sayso.fs.*`，读写扩展目录与用户配置的路径（如 Obsidian 库） |
@@ -93,9 +87,7 @@
 | 语音 | 右 ⌥ / 右 Ctrl | 按住说话，松开结束 |
 | 划词 | ⌥T / Ctrl+T | 选中文字后按下 |
 
-「设置 → 通用 → 快捷键」管理 Sayso 的输入入口。识别完成或读到选区后，Sayso 向所有启用且订阅 `input` 的扩展广播同一条文本事件。
-
-各订阅者独立运行。如果两个扩展都针对同一来源调用 `sayso.insert`，两次写入请求会依次交给宿主。用一个扩展替换另一个时，在「设置 → 扩展」启用替换版并停用原版。
+「设置 → 通用 → 快捷键」管理输入入口。所有已启用的 `input` 处理函数按启用顺序执行。没有扩展时，识别原文或选区原文直接进入交付。
 
 ## 3. 事件
 
@@ -113,7 +105,7 @@ export function focus(event) { … }
 
 ```json
 {
-  "schemaVersion": 4,
+  "schemaVersion": 5,
   "type": "input",
   "id": "7C1E…",
   "timestamp": "2026-10-30T03:12:45Z",
@@ -134,10 +126,11 @@ export function focus(event) { … }
 
 应用信息（`source`、`destination`）为 `{ "id", "name" }`，`id` 是平台的应用标识（macOS 为 Bundle ID），没有前台应用时为 `null`。
 
-### 3.1 `input`：Sayso 广播准备好的文本
+### 3.1 `input`：处理流程中的当前文本
 
-- `input.text`：输入文本，已去除首尾空白，非空。语音输入为识别原文，可能夹杂本地语言；`input.via` 为 `speech` 或 `selection`。
-- `source`：触发时的前台应用。
+- `input.text` 为当前文本，初始值为识别原文或选区原文。`input.via` 为 `speech` 或 `selection`。`source` 为触发时的前台应用。
+- 声明 `transform` 的处理函数可以直接返回非空字符串，异步函数可以返回解析为非空字符串的 Promise。返回 `undefined` 时沿用当前文本。抛出异常、超时或返回无效值时，Sayso 记录错误并用当前文本继续流程。
+- 中间件可以通过与其返回文本一致的主文本块提供高亮和交互。Sayso 在交付时复用已展示最终文本的主文本块，也能直接展示最终文本。
 
 ### 3.2 `action`：用户点了该扩展提供的 `invoke` 操作（只发给提供按钮的扩展）
 
@@ -162,29 +155,29 @@ export function focus(event) { … }
 "source": { "id": "com.apple.Notes", "name": "Notes" }
 ```
 
-- `output`：译文。混说翻译为写入的整句（纯目标语言输入时即原句），互译为译文。
+- `output`：译文。这是当前翻译步骤的结果，后续中间件仍可继续处理文本。
 - `pairs`：「目标语言 · 本地语言」词对，与输入来源无关。混说翻译为每个翻译段一对，互译为整段一对；
   没有需要翻译的片段，或划词译为第三种语言时为空。
 - `card`：Sayso 为该词对画出的词条卡片（`term` 块）的引用。广播前，Sayso 在候选框中为每个词条画一张卡片，归广播者所有；
   同一词条（忽略大小写与首尾标点）的词对共用一张卡片。没有候选框时为 `null`。
-- `context`：词对所在的目标语言整句（混说翻译写入的句子）；互译为 `null`。
+- `context`：词对所在的目标语言整句（混说翻译返回的句子）；互译为 `null`。
 - `card`：展示整次翻译的整句卡片的引用，由广播者画出并指明（混说翻译为整句 `text` 块，互译为译文 `translation` 块）。没有词对时也有，没有候选框时为 `null`。
   附加在整句卡片上的按钮针对整次翻译，显示在候选框底部的操作栏（关闭按钮左侧），而不是整句下方。
 - 每次触发都会广播。扩展不需要自己画词条或整句，用 `sayso.blocks.attach` 在卡片上附加自己的按钮即可：针对单个词条的挂到 `pair.card`（如生词本、收藏夹），针对整次翻译的挂到 `card`（如 Obsidian 记录整次翻译、语法讲解），也不需要关心翻译由谁、从哪种输入产生。
 
 ### 3.4 `inserted`：文字已写入前台应用（hook，由 Sayso 广播）
 
-通过 `sayso.insert` 或块上的 `insert` 操作写入成功后，Sayso 广播给订阅了它的其他扩展：
+语音流程完成投递或用户点击块上的 `insert` 操作且投递成功时，Sayso 广播：
 
 ```json
 "text": "I have an apple.",
 "destination": { "id": "com.apple.Notes", "name": "Notes" },
 "delivery": "inserted",
-"by": "sayso.dictation"
+"by": "sayso.app"
 ```
 
 - `delivery` 为 `inserted`（已写入输入框）或 `copiedToClipboard`（没有可写入的位置，只放入剪贴板）。
-- `by` 为发出写入的扩展。写入者自己不会收到。
+- `by` 为写入来源。语音流程为 `sayso.app`，扩展按钮写入时为相应的扩展 id，该扩展自己不会收到此次广播。
 
 ### 3.5 `focus`：前台应用切换（hook，由 Sayso 广播）
 
@@ -200,7 +193,7 @@ export function focus(event) { … }
 ## 4. `sayso` API
 
 Sayso 在每个扩展的上下文中注入全局对象 `sayso`。块、数据、朗读、广播是**指令**，调用即生效、没有返回值；
-模型、写入、读取数据、文件、脚本执行是**请求**（`sayso.store.list`、`sayso.llm`、`sayso.insert`、`sayso.shell.run` 返回 Promise）。
+模型、读取数据、文件、脚本执行是**请求**（`sayso.store.list`、`sayso.llm`、`sayso.shell.run` 返回 Promise）。
 指令出错（内容无法识别、未声明能力）不会中断扩展，只被忽略并记为警告，显示在扩展管理页的最近一次执行状态中；请求出错（未声明能力、未配置模型、模型调用失败等）抛出异常。
 
 | API | 能力 | 说明 |
@@ -215,7 +208,6 @@ Sayso 在每个扩展的上下文中注入全局对象 `sayso`。块、数据、
 | `await sayso.store.list(collection)` | `store` | 读取集合中的全部记录（含本次已执行的写入） |
 | `sayso.speak(text, language)` | — | 自动朗读；用户关闭了「自动朗读」时不发声 |
 | `await sayso.llm(system, user)` | `llm` | 用用户配置的模型与思考强度补全，返回模型输出的文本；当前有背景（见 `sayso.context.set`）时，core 会把它附在 `system` 之后。未配置模型或调用失败时抛出异常 |
-| `await sayso.insert(text)` | `insert` | 写入触发输入时的前台应用，返回 `"inserted"` 或 `"copiedToClipboard"`；只能在处理 `input` 时使用 |
 | `sayso.publish({ type: "translated", output, pairs, context, card })` | `publish` | 处理 `input` 时广播 `translated` hook，见下文 |
 | `sayso.context.set(text)` | `context` | 替换提供给语音识别与翻译模型的背景，下一次录音与模型请求生效；超过 400 字时截断。只保存在内存中，多个扩展设置时以最后一次为准，声明了该能力的扩展被停用时清空 |
 | `sayso.text.mayContainNative(text)` | — | 文本是否可能夹杂本地语言；纯目标语言的文本可以跳过模型调用 |
@@ -365,15 +357,15 @@ sayso.publish({ type: "translated", output: "意外发现", pairs: [{ target: "s
 
 ### 9.1 混说翻译 `sayso.dictation`
 
-- 订阅 `input`，处理 `via: "speech"`；能力为 `blocks`、`publish`、`insert`、`llm`。
-- 用目标语言说话，不会的词用本地语言说：用 `sayso.llm` 生成完整的目标语言句子并调整必要的语法、语序，用 `sayso.insert` 写入前台应用。输出片段通过原文单元的编号范围建立对应关系，引用可重排，须覆盖原文词语且不能重复，独立标点可随整句重排删除或合并；原文无需由模型重抄。高亮和词对由实际文字变化推导，忽略共同前后文及纯大小写、空白、标点变化，模型不再提供语言标注字段。
+- 订阅 `input`，处理 `via: "speech"`；能力为 `blocks`、`publish`、`transform`、`llm`。
+- 用目标语言说话，不会的词用本地语言说：用 `sayso.llm` 生成完整的目标语言句子并调整必要的语法、语序，返回给 Sayso 继续处理并写入前台应用。输出片段通过原文单元的编号范围建立对应关系，引用可重排，须覆盖原文词语且不能重复，独立标点可随整句重排删除或合并；原文无需由模型重抄。高亮和词对由实际文字变化推导，忽略共同前后文及纯大小写、空白、标点变化，模型不再提供语言标注字段。
 - `main.js` 负责执行流程，`prompt.js` 负责通用提示词组装，`languages.js` 负责语言资料及语言对规则，`transcript.js` 负责无损的原文引用与结果组装。只注入当前目标语言、本地语言的资料，并由等义例句生成当前语言对的完整分段示例。内置模块通过受限的嵌入式 ES 模块加载器导入，两端共用同一份源码。
-- 输出 `text` 块（id `text`，译文高亮、点击朗读），必要时附提示块（`clipboard`、`notice`），朗读每个翻译段，最后广播 `translated`（`output`、`context` 均为写入的整句，`card` 为 `text`），Sayso 随之为每个翻译段画出词条卡片。
-- 未配置翻译模型或翻译失败时原样写入识别结果并提示原因，说的话不丢。
+- 输出 `text` 块（id `text`，译文高亮、点击朗读），必要时附提示块（`notice`），朗读每个翻译段，最后广播 `translated`（`output`、`context` 均为当前翻译的整句，`card` 为 `text`），Sayso 随之为每个翻译段画出词条卡片。
+- 未配置翻译模型或翻译失败时保留当前文本，并显示原因。
 
 ### 9.2 互译 `sayso.selection`
 
-- 订阅 `input`，处理 `via: "selection"`；能力为 `blocks`、`publish`、`llm`。
+- 订阅 `input`，处理 `via: "selection"`，声明 `blocks`、`publish`、`transform`、`llm` 能力并返回译文。
 - 输入为本地语言则译为目标语言，其他语言译为本地语言；输出译文（`translation`）、原文（`original`）两个 `text` 块。
 - 涉及目标语言时朗读目标语言一侧。翻译完毕广播 `translated`（`output` 为译文，`context` 为 `null`，`card` 为 `translation`）；第三种语言（如目标语言为日语时选中英文）不朗读，词对为空。
 

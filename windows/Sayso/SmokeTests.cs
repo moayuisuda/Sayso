@@ -64,7 +64,7 @@ internal static class SmokeTests
             var directory = Path.Combine(App.DataDirectory, "Extensions", "smoke-shell");
             Directory.CreateDirectory(directory);
             await File.WriteAllTextAsync(Path.Combine(directory, "extension.json"), """
-                {"schemaVersion":4,"id":"test.smoke.shell","name":"Shell check","main":"main.js",
+                {"schemaVersion":5,"id":"test.smoke.shell","name":"Shell check","main":"main.js",
                  "events":["focus"],"capabilities":["shell","store"],"timeoutSeconds":10}
                 """);
             await File.WriteAllTextAsync(Path.Combine(directory, "main.js"), """
@@ -155,6 +155,87 @@ internal static class SmokeTests
             if ((await core.Call("session"))!["kind"]!.GetValue<string>() != "presenting") throw new Exception("Expected a configuration error surface.");
             candidate.ValidateCompactNotice();
             await core.Call("dismiss");
+        });
+        await Check("Selecting a corner on the screen preview moves the visible candidate", async () =>
+        {
+            window.Show();
+            await window.Navigate("general");
+            ((Microsoft.UI.Xaml.FrameworkElement)window.Content).UpdateLayout();
+            var section = Descendants(window.Content).OfType<CandidatePositionPicker>().Single();
+            var screen = Descendants(section).OfType<Microsoft.UI.Xaml.Controls.Grid>().Single(grid =>
+                Microsoft.UI.Xaml.Automation.AutomationProperties.GetAutomationId(grid) == "CandidatePositionScreen");
+            var buttons = screen.Children.OfType<Microsoft.UI.Xaml.Controls.Button>().ToArray();
+            if (buttons.Length != 4 || screen.RowDefinitions.Count != 0 || screen.ColumnDefinitions.Count != 0)
+                throw new Exception("Expected four corner buttons on one screen.");
+            await core.Call("trigger", new JsonObject { ["keyCode"] = 0xA3, ["modifiers"] = 0 });
+            var original = (await core.Call("settings"))!["candidateCorner"]!.DeepClone();
+            try
+            {
+                Select("topLeft", topLeft: true);
+                var topLeft = await WaitForPosition(left: true);
+                RequireEqualInsets(topLeft: true);
+                Select("bottomRight", topLeft: false);
+                var bottomRight = await WaitForPosition(left: false);
+                RequireEqualInsets(topLeft: false);
+                if (buttons.Count(button => !string.IsNullOrEmpty(Microsoft.UI.Xaml.Automation.AutomationProperties.GetItemStatus(button))) != 1)
+                    throw new Exception("Exactly one screen corner should be selected.");
+                if (bottomRight.X <= topLeft.X || bottomRight.Y <= topLeft.Y)
+                    throw new Exception("The candidate did not move from the top left to the bottom right.");
+            }
+            finally
+            {
+                await core.Call("dismiss");
+                await window.Save("candidateCorner", original);
+            }
+
+            void RequireEqualInsets(bool topLeft)
+            {
+                screen.UpdateLayout();
+                var preview = Descendants(screen).OfType<Microsoft.UI.Xaml.Controls.Border>().Single(border =>
+                    border.Visibility == Microsoft.UI.Xaml.Visibility.Visible &&
+                    Microsoft.UI.Xaml.Automation.AutomationProperties.GetAutomationId(border) == "CandidatePositionPreview");
+                var bounds = preview.TransformToVisual(screen).TransformBounds(
+                    new Windows.Foundation.Rect(0, 0, preview.ActualWidth, preview.ActualHeight));
+                var horizontal = topLeft ? bounds.Left : screen.ActualWidth - bounds.Right;
+                var vertical = topLeft ? bounds.Top : screen.ActualHeight - bounds.Bottom;
+                if (Math.Abs(horizontal - vertical) > 1)
+                    throw new Exception($"Screen preview has unequal insets: {horizontal} and {vertical}.");
+            }
+
+            void Select(string value, bool topLeft)
+            {
+                var button = buttons.Single(button => Microsoft.UI.Xaml.Automation.AutomationProperties.GetAutomationId(button) == value);
+                var horizontal = topLeft ? Microsoft.UI.Xaml.HorizontalAlignment.Left : Microsoft.UI.Xaml.HorizontalAlignment.Right;
+                var vertical = topLeft ? Microsoft.UI.Xaml.VerticalAlignment.Top : Microsoft.UI.Xaml.VerticalAlignment.Bottom;
+                if (button.HorizontalAlignment != horizontal || button.VerticalAlignment != vertical)
+                    throw new Exception("The button is not located at the corresponding screen corner.");
+                var peer = new Microsoft.UI.Xaml.Automation.Peers.ButtonAutomationPeer(button);
+                ((Microsoft.UI.Xaml.Automation.Provider.IInvokeProvider)peer).Invoke();
+            }
+
+            async Task<Windows.Graphics.PointInt32> WaitForPosition(bool left)
+            {
+                var deadline = DateTime.UtcNow.AddSeconds(2);
+                while (DateTime.UtcNow < deadline)
+                {
+                    var display = Microsoft.UI.Windowing.DisplayArea.GetFromWindowId(
+                        candidate.AppWindow.Id, Microsoft.UI.Windowing.DisplayAreaFallback.Primary).WorkArea;
+                    var position = candidate.AppWindow.Position;
+                    var size = candidate.AppWindow.Size;
+                    var dx = position.X - display.X;
+                    var dy = position.Y - display.Y;
+                    if (candidate.AppWindow.IsVisible && dx >= 0 && dy >= 0 &&
+                        dx + size.Width <= display.Width && dy + size.Height <= display.Height)
+                    {
+                        var centeredX = (display.Width - size.Width) / 2;
+                        var centeredY = (display.Height - size.Height) / 2;
+                        if (left ? dx < centeredX && dy < centeredY : dx > centeredX && dy > centeredY)
+                            return position;
+                    }
+                    await Task.Delay(20);
+                }
+                throw new Exception("The candidate did not reach the selected corner.");
+            }
         });
         await Check("Core inserts into the focused Sayso context field and the value persists", async () =>
         {

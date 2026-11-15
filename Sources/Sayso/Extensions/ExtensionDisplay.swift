@@ -9,6 +9,7 @@ extension Capability {
         case .blocks: return "rectangle.stack"
         case .store: return "externaldrive"
         case .insert: return "text.insert"
+        case .transform: return "text.badge.checkmark"
         case .llm: return "sparkles"
         case .publish: return "dot.radiowaves.left.and.right"
         case .fs: return "folder"

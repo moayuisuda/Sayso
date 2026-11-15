@@ -86,27 +86,27 @@ flowchart LR
 
 - **Rust core** 是设置、识别、翻译、扩展与会话逻辑的运行时公用核心。macOS 通过 UniFFI 绑定调用，Windows 通过一层窄 C ABI 调用，两端行为一致。
 - **原生宿主**只提供平台能力与界面：全局热键、录音、读取选区、写入前台应用、系统朗读，以及候选框和设置窗口。
-- **扩展**运行在 core 内嵌的 QuickJS 中，通过 `sayso.*` API 往候选框添加内容、读写自己的数据、写入文字或调用已配置的大模型。
+- **扩展**运行在 core 内嵌的 QuickJS 中，可以处理输入文本、向候选框添加内容、读写自己的数据或调用已配置的大模型。
 
 代码结构、混说翻译的实现细节与测试方法见 [开发说明](docs/development.md)。
 
 ## 扩展
 
-语音识别和划词完成后，Sayso 向所有已启用的订阅者广播同一个 `input` 事件。内置混说翻译、互译与第三方扩展用同样的事件获取文本，可按 `event.input.via` 区分语音和划词。扩展还可订阅 `translated`、`inserted` 或 `focus`，例如生词本在翻译后给词条卡片加按钮。
+语音识别或划词读取完成后，Sayso 按启用顺序调用订阅 `input` 的中间件。每个中间件可以返回文本交给下一步，并用 `event.input.via` 区分输入来源。链结束后，Sayso 将语音结果写入触发时的应用，或把划词结果展示在候选框。关闭所有中间件时直接交付原文。扩展也可订阅 `translated`、`inserted`、`focus` 等事件，例如在翻译后给词条卡片加按钮。
 
-扩展需声明所用能力（`blocks` / `store` / `insert` / `llm` / `publish` / `fs` / `context` / `shell`），第三方扩展启用前由用户确认。
+扩展需声明所用能力（`blocks` / `store` / `insert` / `transform` / `llm` / `publish` / `fs` / `context` / `shell`），第三方扩展启用前由用户确认。
 `shell` 提供 macOS 与 Windows 共用的脚本执行能力，支持管道、重定向和内置命令，可调用本机安装的程序。
 
 | 示例 | 作用 |
 | --- | --- |
 | [`favorites`](examples/extensions/favorites) | 为翻译出的单词显示收藏按钮，单独页签管理 |
-| [`dictation-words`](examples/dictation-words) | 订阅语音输入，写入整句，把翻译片段拆成带释义的词条 |
+| [`dictation-words`](examples/dictation-words) | 处理语音并返回整句，把翻译片段拆成带释义的词条 |
 | [`explain`](examples/extensions/explain) | 翻译完成后在整句卡片上附加「讲解语法」按钮，用已配置的模型讲解这句外语 |
 | [`obsidian`](examples/extensions/obsidian) | 在整句卡片与每张词条卡片上附加「记到 Obsidian」按钮，把整次翻译或单个词条写成卡片，追加到当天的笔记 |
 
 将扩展文件夹放入扩展目录（macOS：`~/Library/Application Support/Sayso/Extensions/`，Windows：`%LOCALAPPDATA%\Sayso\Extensions\`），在「设置 → 扩展」中重新加载并启用。扩展也可导出为 `.sayso` 文件，双击即可安装。协议与 API 见 [扩展协议](docs/extension-protocol.md)。
 
-要试用拆词版，先运行 `python scripts/package-dictation-words.py`，再安装生成的 `build/extensions/dictation-words.sayso`。在「设置 → 扩展」启用「混说翻译 · 拆词」并停用原版「混说翻译」，即可继续使用原来的语音快捷键。两个扩展都启用时，都会处理语音。
+要试用拆词版，先运行 `python scripts/package-dictation-words.py`，再安装生成的 `build/extensions/dictation-words.sayso`。在「设置 → 扩展」启用「混说翻译 · 拆词」并停用原版「混说翻译」，即可继续使用原来的语音快捷键。两个扩展都启用时，会依次处理语音，Sayso 写入一次。
 
 ### 用自己的 Agent 编写扩展
 

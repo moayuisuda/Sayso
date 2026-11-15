@@ -4,7 +4,7 @@ use sayso_core::error::CoreError;
 use sayso_core::llm::Endpoint;
 use sayso_core::plugin::{built_in_plugins, run, Host, Instruction, RunStatus};
 use sayso_core::protocol::{
-    BlockContent, Delivery, Event, Input, InputSource, LanguagePair, Payload, Translation, TranslationPair,
+    BlockContent, Event, Input, InputSource, LanguagePair, Payload, Translation, TranslationPair,
 };
 use sayso_core::settings::{llm_endpoint, SecretSlot, Secrets, Settings};
 use sayso_core::store::StoreRecord;
@@ -14,7 +14,6 @@ use std::sync::{Arc, Mutex};
 struct ReplayHost {
     endpoint: Endpoint,
     http: reqwest::Client,
-    output: Mutex<String>,
     instructions: Mutex<Vec<Instruction>>,
     replies: Mutex<Vec<String>>,
 }
@@ -34,11 +33,6 @@ impl Host for ReplayHost {
         let reply = self.endpoint.complete(&self.http, &system, &user).await?;
         self.replies.lock().unwrap().push(reply.clone());
         Ok(reply)
-    }
-    async fn insert(&self, text: String) -> Result<Delivery, CoreError> {
-        // 回放只记录正式插件生成的输入文本，不写入用户当前应用。
-        *self.output.lock().unwrap() = text;
-        Ok(Delivery::Inserted)
     }
     fn records(&self, _collection: &str) -> Result<Vec<StoreRecord>, CoreError> {
         Err(CoreError::InvalidInstruction("dictation replay does not provide stores".into()))
@@ -80,7 +74,6 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         let host = Arc::new(ReplayHost {
             endpoint: endpoint.clone(),
             http: reqwest::Client::new(),
-            output: Mutex::default(),
             instructions: Mutex::default(),
             replies: Mutex::default(),
         });
@@ -158,7 +151,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         if !highlights.is_empty() && terms.is_empty() {
             failed = true;
         }
-        let output = host.output.lock().unwrap().clone();
+        let output = result.output.as_deref().unwrap_or(&case.transcript);
         let lower_output = output.to_lowercase();
         let unmet: Vec<_> = case
             .contains

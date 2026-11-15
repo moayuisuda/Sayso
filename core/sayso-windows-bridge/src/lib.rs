@@ -11,7 +11,7 @@ use sayso_core::asr::source::AsrFieldKind;
 use sayso_core::plugin::RunStatus;
 use sayso_core::protocol::{AppInfo, Delivery, Language};
 use sayso_core::session::SessionState;
-use sayso_core::settings::{Hotkey, PlatformDefaults, SecretSlot};
+use sayso_core::settings::{candidate_corners, Hotkey, PlatformDefaults, SecretSlot};
 use sayso_core::{AppRelease, Core, CoreObserver, Platform, PlatformError};
 use serde::de::DeserializeOwned;
 use serde_json::{json, Value};
@@ -185,6 +185,7 @@ impl Bridge {
             "dismiss" => { core.dismiss(); Ok(Value::Null) }
             "dismissSurface" => { core.dismiss_surface(decode(args)?); Ok(Value::Null) }
             "hover" => { core.set_hovering(decode(args)?); Ok(Value::Null) }
+            "candidateCorners" => Ok(json!(candidate_corners())),
             "languages" => Ok(json!(Language::ALL.map(|l| json!({"value":l,"title":l.native_name()})))),
             "providers" => Ok(json!(sayso_core::llm::LlmProvider::ALL.map(|p| json!({"value":p,"title":p.display_name(),"requiresKey":p.requires_api_key()})))),
             "asrSources" => Ok(json!(core.asr_sources().into_iter().map(|s| json!({"id":s.id,"title":s.title,"caption":s.caption,"languages":s.languages,

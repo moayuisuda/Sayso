@@ -29,6 +29,8 @@ struct FakePlatform {
     selection_reads_aborted: Arc<AtomicUsize>,
     inserted: Mutex<Vec<(String, Option<AppInfo>)>>,
     insert_error: Mutex<Option<String>>,
+    insert_gate: Mutex<Option<Arc<tokio::sync::Notify>>>,
+    insert_started: AtomicBool,
     audio_stops: AtomicUsize,
     speech_error: Mutex<Option<String>>,
     spoken: Mutex<Vec<(String, Language)>>,
@@ -62,6 +64,11 @@ impl Platform for FakePlatform {
     async fn insert_text(&self, text: String, destination: Option<AppInfo>) -> Result<Delivery, PlatformError> {
         if let Some(message) = self.insert_error.lock().unwrap().clone() {
             return Err(PlatformError::Failed { message });
+        }
+        let gate = self.insert_gate.lock().unwrap().clone();
+        self.insert_started.store(true, Ordering::SeqCst);
+        if let Some(gate) = gate {
+            gate.notified().await;
         }
         self.inserted.lock().unwrap().push((text, destination));
         Ok(Delivery::Inserted)
@@ -183,7 +190,7 @@ impl Drop for LocalAsr {
     }
 }
 
-/// 本地 HTTP 服务提供转写，数据目录只安装订阅 `input` hook 的 echo 扩展。
+/// 本地 HTTP 服务提供转写，扩展目录包含观察者和按需启用的文本中间件。
 fn fixture(selection: Option<&str>) -> (tempfile::TempDir, Core, Arc<FakePlatform>, Arc<RecordingObserver>, LocalAsr) {
     let data = tempfile::tempdir().unwrap();
     let server = LocalAsr::start();
@@ -197,7 +204,7 @@ fn fixture(selection: Option<&str>) -> (tempfile::TempDir, Core, Arc<FakePlatfor
     };
     install(
         "echo",
-        r#"{"schemaVersion":4,"id":"test.echo","name":"Echo","main":"main.js","events":["input"],
+        r#"{"schemaVersion":5,"id":"test.echo","name":"Echo","main":"main.js","events":["input"],
             "capabilities":["blocks"]}"#,
         &[(
             "main.js",
@@ -211,16 +218,30 @@ fn fixture(selection: Option<&str>) -> (tempfile::TempDir, Core, Arc<FakePlatfor
     // 第三方后处理扩展：按测试需要启用。
     install(
         "glossary",
-        r#"{"schemaVersion":4,"id":"test.glossary","name":"Glossary","main":"main.js","events":["input"],
-            "capabilities":["blocks","publish","insert"]}"#,
+        r#"{"schemaVersion":5,"id":"test.glossary","name":"Glossary","main":"main.js","events":["input"],
+            "capabilities":["blocks","publish","transform"]}"#,
         &[(
             "main.js",
             r#"export async function input(event) {
                  sayso.blocks.upsert({ id: "gloss", type: "text", runs: [{ text: "释义" }] });
-                 if (event.input.via === "speech") await sayso.insert("第三方处理结果");
+                 if (event.input.via === "speech") return "处理：" + event.input.text;
                  sayso.publish({ type: "translated", output: "释义", pairs: [{ target: event.input.text, native: "释义" }], card: "gloss" });
+                 return "释义";
                }"#,
         )],
+    );
+
+    install(
+        "broken",
+        r#"{"schemaVersion":5,"id":"test.broken","name":"Broken","main":"main.js","events":["input"],
+            "capabilities":["transform"]}"#,
+        &[("main.js", r#"export function input() { throw new Error("stage failed"); }"#)],
+    );
+    install(
+        "format",
+        r#"{"schemaVersion":5,"id":"test.format","name":"Format","main":"main.js","events":["input"],
+            "capabilities":["transform"]}"#,
+        &[("main.js", r#"export function input(event) { return "[" + event.input.text + "]"; }"#)],
     );
 
     let platform = Arc::new(FakePlatform { selection: selection.map(Into::into), ..Default::default() });
@@ -267,10 +288,18 @@ fn block_ids(surface: &SurfaceView, source: &str) -> Vec<String> {
 
 fn status_message(surface: &SurfaceView, source: &str) -> String {
     let section = surface.sections.iter().find(|section| section.source_id == source).expect("section exists");
-    let BlockContent::Status { message, .. } = &section.blocks[0].block.content else {
-        panic!("expected status block")
-    };
-    message.clone()
+    section.blocks.iter().find_map(|item| match &item.block.content {
+        BlockContent::Status { message, .. } => Some(message.clone()),
+        _ => None,
+    }).expect("status block exists")
+}
+
+fn output_text(surface: &SurfaceView) -> String {
+    let block = surface.sections.iter().find(|section| section.source_id == "sayso.app")
+        .and_then(|section| section.blocks.iter().find(|item| item.block.id == "output"))
+        .expect("Sayso output block exists");
+    let BlockContent::Text { runs, .. } = &block.block.content else { panic!("expected output text") };
+    runs.iter().map(|run| run.text.as_str()).collect()
 }
 
 /// 上报前台应用，等扩展处理完。
@@ -289,7 +318,7 @@ fn dictate(core: &Core, server: &LocalAsr) -> String {
     core.trigger(SPEECH);
     core.push_audio(vec![0; 16000]);
     core.stop();
-    wait_for_surface(core, |surface| !block_ids(surface, "sayso.dictation").is_empty());
+    wait_for_surface(core, |surface| !surface.working);
     server.forms.lock().unwrap().last().expect("speech service was called").clone()
 }
 
@@ -355,7 +384,7 @@ fn speech_flow_inserts_transcript_into_the_triggering_app() {
     core.push_audio(vec![0; 16000]);
     core.stop();
 
-    let surface = wait_for_surface(&core, |surface| block_ids(surface, "sayso.dictation").len() == 2);
+    let surface = wait_for_surface(&core, |surface| !surface.working);
     assert_eq!(block_ids(&surface, "sayso.dictation"), ["text", "notice"]);
     let inserted = platform.inserted.lock().unwrap().clone();
     assert_eq!(server.requests.load(Ordering::SeqCst), 1);
@@ -372,7 +401,28 @@ fn speech_flow_inserts_transcript_into_the_triggering_app() {
     assert!(first.is_some_and(|surface| surface.working), "{first:?}");
 }
 
-/// 平台写入异常必须穿过 Core 和插件边界，保留内容并显示真实原因。
+/// 两种输入都可以在没有任何扩展时走完流程。
+#[test]
+fn speech_and_selection_deliver_original_text_without_extensions() {
+    let (_data, core, platform, _, _server) = fixture(Some("selected text"));
+    let mut settings = core.settings();
+    settings.enabled_extensions.clear();
+    core.update_settings(settings).unwrap();
+
+    core.trigger(SPEECH);
+    core.push_audio(vec![0; 16000]);
+    core.stop();
+    let speech = wait_for_surface(&core, |surface| !surface.working);
+    assert_eq!(output_text(&speech), "I have a 苹果.");
+    assert_eq!(platform.inserted.lock().unwrap()[0].0, "I have a 苹果.");
+
+    core.trigger(SELECTION);
+    let selection = wait_for_surface(&core, |surface| surface.id != speech.id && !surface.working);
+    assert_eq!(output_text(&selection), "selected text");
+    assert_eq!(platform.inserted.lock().unwrap().len(), 1);
+}
+
+/// 平台写入失败时保留处理结果，并显示真实原因。
 #[test]
 fn speech_flow_reports_the_real_insertion_error_and_keeps_the_transcript() {
     let (_data, core, platform, _, _server) = fixture(Some(""));
@@ -381,15 +431,13 @@ fn speech_flow_reports_the_real_insertion_error_and_keeps_the_transcript() {
     core.push_audio(vec![0; 16000]);
     core.stop();
 
-    let surface =
-        wait_for_surface(&core, |surface| !surface.working && block_ids(surface, "sayso.dictation").len() == 3);
-    assert_eq!(block_ids(&surface, "sayso.dictation"), ["text", "insertion", "notice"]);
+    let surface = wait_for_surface(&core, |surface| !surface.working);
+    assert_eq!(block_ids(&surface, "sayso.dictation"), ["text", "notice"]);
     assert!(platform.inserted.lock().unwrap().is_empty());
     let blocks = &surface.sections.iter().find(|section| section.source_id == "sayso.dictation").unwrap().blocks;
     let BlockContent::Text { runs, .. } = &blocks[0].block.content else { panic!("expected retained transcript") };
     assert_eq!(runs.iter().map(|run| run.text.as_str()).collect::<String>(), "I have a 苹果.");
-    let BlockContent::Status { message, .. } = &blocks[1].block.content else { panic!("expected insertion error") };
-    assert!(message.contains("Clipboard snapshot failed"));
+    assert!(status_message(&surface, "sayso.app").contains("Clipboard snapshot failed"));
 }
 
 /// 关闭事件只作用于对应结果框，迟到事件不得打断下一轮录音或识别。
@@ -425,66 +473,123 @@ fn panel_dismissal_ignores_stale_ids_and_never_cancels_recording_or_processing()
     processing.cancel();
 }
 
-/// 关闭或替换候选框应取消对应的 shell，而不是让脚本继续执行到事件超时。
+/// 关闭候选框应取消对应的 shell，而不是让脚本继续执行到事件超时。
 #[test]
-fn closing_or_replacing_a_surface_stops_its_shell() {
+fn closing_a_surface_stops_its_shell() {
     common::install_shell_executable();
-    for replace in [false, true] {
-        let (data, core, _, _, _server) = fixture(Some("hello"));
-        let directory = data.path().join("Extensions/shell");
-        std::fs::create_dir_all(&directory).unwrap();
-        std::fs::write(
-            directory.join("extension.json"),
-            r#"{
-            "schemaVersion":4,"id":"test.shell","name":"Shell","main":"main.js",
-            "events":["input"],"capabilities":["shell"],"timeoutSeconds":10
-        }"#,
-        )
-        .unwrap();
-        std::fs::write(
-            directory.join("main.js"),
-            r#"
-            export async function input() {
-              await sayso.shell.run("echo started > started.txt; sleep 10; echo late > late.txt");
-            }
-        "#,
-        )
-        .unwrap();
-        core.reload_extensions();
-        core.set_enabled("test.shell".into(), true).unwrap();
-        let key = Hotkey { key_code: 70, modifiers: 1 };
-        core.set_shortcut(InputSource::Selection, Some(key)).unwrap();
-        core.trigger(key);
-        let surface = wait_for_surface(&core, |surface| surface.working && directory.join("started.txt").exists());
-        if replace {
-            core.set_enabled("test.shell".into(), false).unwrap();
-            core.trigger(key);
-        } else {
-            core.dismiss_surface(surface.id);
+    let (data, core, _, _, _server) = fixture(Some("hello"));
+    let directory = data.path().join("Extensions/shell");
+    std::fs::create_dir_all(&directory).unwrap();
+    std::fs::write(
+        directory.join("extension.json"),
+        r#"{
+        "schemaVersion":5,"id":"test.shell","name":"Shell","main":"main.js",
+        "events":["input"],"capabilities":["shell"],"timeoutSeconds":10
+    }"#,
+    )
+    .unwrap();
+    std::fs::write(
+        directory.join("main.js"),
+        r#"
+        export async function input() {
+          await sayso.shell.run("echo started > started.txt; sleep 10; echo late > late.txt");
         }
-        let deadline = Instant::now() + Duration::from_secs(2);
-        loop {
-            let result = core
-                .extensions()
-                .into_iter()
-                .find(|extension| extension.manifest.id == "test.shell")
-                .unwrap()
-                .last_result;
-            if let Some(result) = result {
-                assert!(
-                    matches!(result.status, sayso_core::plugin::RunStatus::Failed { ref message } if message.contains("cancelled")),
-                    "{result:?}"
-                );
-                break;
-            }
-            assert!(Instant::now() < deadline, "closing the surface did not stop its shell");
-            std::thread::sleep(Duration::from_millis(10));
+    "#,
+    )
+    .unwrap();
+    core.reload_extensions();
+    core.set_enabled("test.shell".into(), true).unwrap();
+    let key = Hotkey { key_code: 70, modifiers: 1 };
+    core.set_shortcut(InputSource::Selection, Some(key)).unwrap();
+    core.trigger(key);
+    let surface = wait_for_surface(&core, |surface| surface.working && directory.join("started.txt").exists());
+    core.dismiss_surface(surface.id);
+    let deadline = Instant::now() + Duration::from_secs(2);
+    loop {
+        let result = core
+            .extensions()
+            .into_iter()
+            .find(|extension| extension.manifest.id == "test.shell")
+            .unwrap()
+            .last_result;
+        if let Some(result) = result {
+            assert!(
+                matches!(result.status, sayso_core::plugin::RunStatus::Failed { ref message } if message.contains("cancelled")),
+                "{result:?}"
+            );
+            break;
         }
-        assert!(!directory.join("late.txt").exists());
+        assert!(Instant::now() < deadline, "closing the surface did not stop its shell");
+        std::thread::sleep(Duration::from_millis(10));
     }
+    assert!(!directory.join("late.txt").exists());
 }
 
-/// 再按语音键结束录音；同一条识别结果同时投递给两个已启用的订阅者。
+/// 在插件处理中、隐藏候选框后和平台交付中，快捷键都不能启动第二轮。
+#[test]
+fn input_shortcuts_wait_until_speech_delivery_completes() {
+    common::install_shell_executable();
+    let (data, core, platform, _, _server) = fixture(Some("hello"));
+    let gate = Arc::new(tokio::sync::Notify::new());
+    *platform.insert_gate.lock().unwrap() = Some(gate.clone());
+
+    let directory = data.path().join("Extensions/slow");
+    std::fs::create_dir_all(&directory).unwrap();
+    std::fs::write(
+        directory.join("extension.json"),
+        r#"{"schemaVersion":5,"id":"test.slow","name":"Slow","main":"main.js","events":["input"],
+            "capabilities":["shell"],"timeoutSeconds":15}"#,
+    )
+    .unwrap();
+    std::fs::write(
+        directory.join("main.js"),
+        r#"export async function input(event) {
+            if (event.input.via === "speech") await sayso.shell.run("echo started > started.txt; sleep 10");
+        }"#,
+    )
+    .unwrap();
+    core.reload_extensions();
+    core.set_enabled("test.slow".into(), true).unwrap();
+
+    core.trigger(SPEECH);
+    core.push_audio(vec![0; 16000]);
+    core.stop();
+    let surface = wait_for_surface(&core, |surface| surface.working && directory.join("started.txt").exists());
+    core.toggle(SPEECH);
+    core.trigger(SELECTION);
+    assert!(matches!(core.session_state(), SessionState::Presenting { surface: current } if current.id == surface.id));
+    assert_eq!(platform.selection_reads_started.load(Ordering::SeqCst), 0);
+
+    // 关闭候选框会终止脚本，随后等平台写入。候选框与输入会话的生命周期不同。
+    core.dismiss_surface(surface.id);
+    assert_eq!(core.session_state(), SessionState::Idle);
+    let deadline = Instant::now() + Duration::from_secs(5);
+    while !platform.insert_started.load(Ordering::SeqCst) {
+        assert!(Instant::now() < deadline, "platform delivery did not start");
+        std::thread::sleep(Duration::from_millis(10));
+    }
+    core.trigger(SPEECH);
+    core.trigger(SELECTION);
+    assert_eq!(core.session_state(), SessionState::Idle);
+    assert_eq!(platform.selection_reads_started.load(Ordering::SeqCst), 0);
+    assert!(platform.inserted.lock().unwrap().is_empty());
+
+    gate.notify_one();
+    // 交付结束后空闲状态会再次推送，即使候选框已关闭。
+    let deadline = Instant::now() + Duration::from_secs(5);
+    loop {
+        core.trigger(SPEECH);
+        if matches!(core.session_state(), SessionState::Recording { .. }) {
+            break;
+        }
+        assert!(Instant::now() < deadline, "next recording did not start");
+        std::thread::sleep(Duration::from_millis(10));
+    }
+    assert_eq!(platform.inserted.lock().unwrap().len(), 1);
+    core.cancel();
+}
+
+/// 再按语音键结束录音；中间件按顺序传递文本，失败时保留当时的结果，只写入一次。
 #[test]
 fn toggling_a_speech_shortcut_stops_the_recording() {
     let (_data, core, platform, _, _server) = fixture(Some(""));
@@ -493,6 +598,8 @@ fn toggling_a_speech_shortcut_stops_the_recording() {
     assert!(matches!(core.session_state(), SessionState::Recording { command, .. }
         if command == "语音输入"));
     core.set_enabled("test.glossary".into(), true).unwrap();
+    core.set_enabled("test.broken".into(), true).unwrap();
+    core.set_enabled("test.format".into(), true).unwrap();
     core.push_audio(vec![0; 16000]);
     core.toggle(SPEECH);
 
@@ -500,8 +607,10 @@ fn toggling_a_speech_shortcut_stops_the_recording() {
     assert_eq!(status_message(&surface, "test.echo"), "speech: I have a 苹果.");
     assert!(!block_ids(&surface, "sayso.dictation").is_empty());
     let inserted = platform.inserted.lock().unwrap();
-    assert_eq!(inserted.len(), 2);
-    assert!(inserted.iter().any(|(text, _)| text == "第三方处理结果"));
+    assert_eq!(inserted.len(), 1);
+    assert_eq!(inserted[0].0, "[处理：I have a 苹果.]");
+    assert_eq!(output_text(&surface), inserted[0].0);
+    assert!(status_message(&surface, "sayso.app").contains("stage failed"));
 }
 
 /// 播放失败应保留原文并提示；自动朗读和按钮共用同一通知，成功重试清除通知。
@@ -673,14 +782,16 @@ fn secrets_persist_to_config_file_and_clear_on_empty() {
 
 /// 第三方扩展订阅 input 后与内置翻译一样：广播的词对由 Sayso 画成词条卡片，生词本照常附加按钮。
 #[test]
-fn selection_broadcast_reaches_built_in_and_external_extensions() {
-    let (_data, core, _, _, _server) = fixture(Some("serendipity"));
+fn selection_pipeline_displays_the_final_text_and_keeps_translation_hooks() {
+    let (_data, core, platform, _, _server) = fixture(Some("serendipity"));
     core.set_enabled("test.glossary".into(), true).unwrap();
     assert!(core.active_shortcuts().contains(&SELECTION));
 
     core.trigger(SELECTION);
     let surface = wait_for_surface(&core, |surface| !surface.working);
-    // 内置互译也收到同一事件；测试环境没有配置翻译模型，因此它报告缺少配置。
+    assert_eq!(output_text(&surface), "释义");
+    assert!(platform.inserted.lock().unwrap().is_empty());
+    // 内置互译在测试环境中报告缺少模型配置，流程继续执行第三方中间件。
     let error = status_message(&surface, "sayso.app");
     assert!(error.contains("互译") && error.contains("未配置翻译模型"), "{error}");
     let section = surface.sections.iter().find(|section| section.source_id == "test.glossary").unwrap();

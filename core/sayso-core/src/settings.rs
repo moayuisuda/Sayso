@@ -6,6 +6,7 @@ use std::path::{Path, PathBuf};
 use serde::{Deserialize, Serialize};
 
 use crate::asr::source;
+use crate::l10n::tr;
 use crate::llm::{Endpoint, LlmProvider, ReasoningLevel};
 use crate::protocol::{InputSource, Language, LanguagePair};
 use crate::store::write_atomically;
@@ -38,6 +39,46 @@ pub struct InputShortcut {
     pub input: InputSource,
 }
 
+/// 候选框在屏幕可用区域中的角落。
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize, uniffi::Enum)]
+#[serde(rename_all = "camelCase")]
+pub enum CandidateCorner {
+    TopLeft,
+    TopRight,
+    BottomLeft,
+    #[default]
+    BottomRight,
+}
+
+#[derive(Clone, Debug, Serialize, uniffi::Record)]
+pub struct CandidateCornerOption {
+    pub value: CandidateCorner,
+    pub title: String,
+    /// -1、1 分别表示靠左、靠右。
+    pub horizontal: i8,
+    /// -1、1 分别表示靠上、靠下。
+    pub vertical: i8,
+}
+
+#[uniffi::export]
+pub fn candidate_corners() -> Vec<CandidateCornerOption> {
+    use CandidateCorner::*;
+    [
+        (TopLeft, "左上", "Top left", -1, -1),
+        (TopRight, "右上", "Top right", 1, -1),
+        (BottomLeft, "左下", "Bottom left", -1, 1),
+        (BottomRight, "右下", "Bottom right", 1, 1),
+    ]
+    .into_iter()
+    .map(|(value, zh, en, horizontal, vertical)| CandidateCornerOption {
+        value,
+        title: tr(zh, en),
+        horizontal,
+        vertical,
+    })
+    .collect()
+}
+
 /// 平台提供的默认按键：各平台键码不同。
 #[derive(Clone, Copy, Debug, uniffi::Record)]
 pub struct PlatformDefaults {
@@ -55,6 +96,8 @@ pub struct Settings {
     pub target_language: Language,
     pub native_language: Language,
     pub hotkey_style: HotkeyStyle,
+    #[serde(default)]
+    pub candidate_corner: CandidateCorner,
     pub shortcuts: Vec<InputShortcut>,
     /// 扩展输出朗读指令时自动朗读。
     pub auto_speak: bool,
@@ -82,6 +125,7 @@ impl Settings {
             target_language: Language::English,
             native_language: Language::Chinese,
             hotkey_style: HotkeyStyle::Hold,
+            candidate_corner: CandidateCorner::default(),
             shortcuts: vec![
                 InputShortcut { key: platform.speech_shortcut, input: InputSource::Speech },
                 InputShortcut { key: platform.selection_shortcut, input: InputSource::Selection },

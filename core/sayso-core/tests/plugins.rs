@@ -9,7 +9,7 @@ use async_trait::async_trait;
 use sayso_core::error::CoreError;
 use sayso_core::plugin::{built_in_plugins, load_installed, run, Host, Instruction, Plugin, RunResult, RunStatus};
 use sayso_core::protocol::{
-    ActionInvocation, ActionKind, ActionOrigin, AppInfo, Block, BlockAction, BlockContent, Delivery, Event,
+    ActionInvocation, ActionKind, ActionOrigin, AppInfo, Block, BlockAction, BlockContent, Event,
     Input, InputSource, Language, LanguagePair, Payload, SurfaceSnapshot, TextStyle, Tone, Translation,
     TranslationPair,
 };
@@ -19,25 +19,19 @@ use sayso_core::store::{StoreRecord, StoreWrite, Stores};
 struct FakeHost {
     extension_id: String,
     reply: String,
-    delivery: Delivery,
-    insert_error: Mutex<Option<String>>,
     stores: Arc<Stores>,
     instructions: Mutex<Vec<Instruction>>,
-    inserted: Mutex<Vec<String>>,
     completions: AtomicUsize,
     prompts: Mutex<Vec<String>>,
 }
 
 impl FakeHost {
-    fn new(extension_id: &str, reply: &str, delivery: Delivery, stores: Arc<Stores>) -> Arc<Self> {
+    fn new(extension_id: &str, reply: &str, stores: Arc<Stores>) -> Arc<Self> {
         Arc::new(FakeHost {
             extension_id: extension_id.into(),
             reply: reply.into(),
-            delivery,
-            insert_error: Mutex::default(),
             stores,
             instructions: Mutex::default(),
-            inserted: Mutex::default(),
             completions: AtomicUsize::new(0),
             prompts: Mutex::default(),
         })
@@ -68,9 +62,6 @@ impl FakeHost {
             .collect()
     }
 
-    fn inserted(&self) -> Vec<String> {
-        self.inserted.lock().unwrap().clone()
-    }
 }
 
 #[async_trait]
@@ -93,13 +84,6 @@ impl Host for FakeHost {
         Ok(self.reply.clone())
     }
 
-    async fn insert(&self, text: String) -> Result<Delivery, CoreError> {
-        if let Some(message) = self.insert_error.lock().unwrap().clone() {
-            return Err(CoreError::Platform(sayso_core::PlatformError::Failed { message }));
-        }
-        self.inserted.lock().unwrap().push(text);
-        Ok(self.delivery)
-    }
 
     fn records(&self, collection: &str) -> Result<Vec<StoreRecord>, CoreError> {
         self.stores.records(&self.extension_id, collection)
@@ -188,14 +172,13 @@ fn carded(target: &str, native: &str, card: &str) -> TranslationPair {
     TranslationPair { card: Some(card.into()), ..pair(target, native) }
 }
 
-async fn run_dictation(transcript: &str, reply: &str, delivery: Delivery) -> (RunResult, Arc<FakeHost>) {
+async fn run_dictation(transcript: &str, reply: &str) -> (RunResult, Arc<FakeHost>) {
     let (_directory, stores) = temporary_stores();
-    let host = FakeHost::new("sayso.dictation", reply, delivery, stores);
+    let host = FakeHost::new("sayso.dictation", reply, stores);
     let result = run(&built_in("sayso.dictation"), &input_event(transcript, InputSource::Speech), host.clone()).await;
     (result, host)
 }
 
-/// 混说翻译后写入译文（译文可连带改写相邻词 a → an），输出文本块与剪贴板提示，朗读翻译块，最后广播词对。
 /// 用给定的表运行应用背景扩展，返回它设置的背景。
 async fn context_for(rows: &[(&str, Option<&str>, &str)], app: Option<&str>) -> Vec<Instruction> {
     let (_directory, stores) = temporary_stores();
@@ -203,7 +186,7 @@ async fn context_for(rows: &[(&str, Option<&str>, &str)], app: Option<&str>) -> 
         let record = serde_json::json!({ "appId": app_id, "text": text }).as_object().unwrap().clone();
         stores.apply("sayso.context", StoreWrite::Put { collection: "contexts".into(), key: (*key).into(), record }).unwrap();
     }
-    let host = FakeHost::new("sayso.context", "", Delivery::Inserted, stores);
+    let host = FakeHost::new("sayso.context", "", stores);
     let app = app.map(|id| AppInfo { id: Some(id.into()), name: None });
     let event = Event::new(LanguagePair::default(), None, Payload::Focus { app });
     assert_eq!(run(&built_in("sayso.context"), &event, host.clone()).await.status, RunStatus::Succeeded);
@@ -223,13 +206,13 @@ async fn app_context_appends_the_app_row_to_the_default_row() {
 }
 
 #[tokio::test]
-async fn dictation_translates_inserts_speaks_and_publishes() {
+async fn dictation_returns_translation_speaks_and_publishes() {
     let reply = r#"{"segments":[{"from":1,"to":2,"text":"I have "},{"from":3,"to":4,"text":"an apple"},{"from":5,"to":5,"text":"."}]}"#;
-    let (result, host) = run_dictation("I have a 苹果.", reply, Delivery::CopiedToClipboard).await;
+    let (result, host) = run_dictation("I have a 苹果.", reply).await;
 
     assert_eq!(result.status, RunStatus::Succeeded);
-    assert_eq!(host.inserted(), ["I have an apple."]);
-    assert_eq!(block_ids(&host.blocks()), ["text", "clipboard"]);
+    assert_eq!(result.output.as_deref(), Some("I have an apple."));
+    assert_eq!(block_ids(&host.blocks()), ["text"]);
     let BlockContent::Text { runs, .. } = &host.blocks()[0].content else { panic!("expected text block") };
     let highlighted: Vec<_> =
         runs.iter().filter(|run| run.style == Some(TextStyle::Highlight)).map(|run| &run.text).collect();
@@ -266,13 +249,12 @@ async fn third_party_dictation_subscribes_to_speech_and_publishes_words() {
         plugin.id(),
         r#"{"segments":[{"from":1,"to":2,"text":"I have "},{"from":3,"to":4,"text":"an apple"},{"from":5,"to":5,"text":"."}],
             "words":[{"target":"have","native":"有"},{"target":"an","native":"一个"},{"target":"apple","native":"苹果"}]}"#,
-        Delivery::Inserted,
         stores,
     );
     let result = run(&plugin, &input_event("I have a 苹果.", InputSource::Speech), host.clone()).await;
     assert_eq!(result.status, RunStatus::Succeeded, "{result:?}");
     assert_eq!(host.completions.load(Ordering::SeqCst), 1);
-    assert_eq!(host.inserted(), ["I have an apple."]);
+    assert_eq!(result.output.as_deref(), Some("I have an apple."));
     assert_eq!(block_ids(&host.blocks()), ["text"]);
     assert_eq!(
         host.instructions().last(),
@@ -285,50 +267,26 @@ async fn third_party_dictation_subscribes_to_speech_and_publishes_words() {
     );
 }
 
-/// 写入平台报错时保留译文与生词事件，不得声称已复制到剪贴板。
-#[tokio::test]
-async fn dictation_preserves_translation_and_word_pairs_when_insertion_fails() {
-    let (_directory, stores) = temporary_stores();
-    let host = FakeHost::new(
-        "sayso.dictation",
-        r#"{"segments":[{"from":1,"to":2,"text":"I have "},{"from":3,"to":4,"text":"an apple"},{"from":5,"to":5,"text":"."}]}"#,
-        Delivery::Inserted,
-        stores,
-    );
-    *host.insert_error.lock().unwrap() = Some("Clipboard snapshot failed".into());
-    let result = run(&built_in("sayso.dictation"), &input_event("I have a 苹果.", InputSource::Speech), host.clone()).await;
-    assert_eq!(result.status, RunStatus::Succeeded);
-    assert!(host.inserted().is_empty());
-    let blocks = host.blocks();
-    assert_eq!(block_ids(&blocks), ["text", "insertion"]);
-    let BlockContent::Status { message, .. } = &blocks[1].content else { panic!("expected insertion error") };
-    assert!(message.contains("Clipboard snapshot failed"));
-    assert!(!message.contains("copied to clipboard"));
-    assert!(host.instructions().iter().any(|instruction| matches!(instruction,
-        Instruction::PublishTranslated { pairs, .. } if pairs == &[pair("an apple", "a 苹果")]
-    )));
-}
-
 /// 译文两侧的空白移到普通文本中，相邻普通文本合并，高亮片段只包含译文本身。
 #[tokio::test]
 async fn dictation_moves_whitespace_around_translations_into_text() {
     let reply = r#"{"segments":[{"from":1,"to":3,"text":"I want to "},{"from":4,"to":4,"text":"eat an apple "},{"from":5,"to":7,"text":"after lunch."}]}"#;
-    let (_, host) = run_dictation("I want to 吃一个苹果 after lunch.", reply, Delivery::Inserted).await;
+    let (result, host) = run_dictation("I want to 吃一个苹果 after lunch.", reply).await;
 
     let BlockContent::Text { runs, .. } = &host.blocks()[0].content else { panic!("expected text block") };
     let texts: Vec<_> = runs.iter().map(|run| run.text.as_str()).collect();
     assert_eq!(texts, ["I want to ", "eat an apple", " after lunch."]);
-    assert_eq!(host.inserted(), ["I want to eat an apple after lunch."]);
+    assert_eq!(result.output.as_deref(), Some("I want to eat an apple after lunch."));
 }
 
 /// 纯目标语言输入不调用模型，原样写入；translated hook 照常广播，词对为空。
 #[tokio::test]
 async fn dictation_skips_model_for_pure_target_language() {
-    let (result, host) = run_dictation("  I want an apple today.  ", "", Delivery::Inserted).await;
+    let (result, host) = run_dictation("  I want an apple today.  ", "").await;
 
     assert_eq!(result.status, RunStatus::Succeeded);
     assert_eq!(host.completions.load(Ordering::SeqCst), 0);
-    assert_eq!(host.inserted(), ["I want an apple today."]);
+    assert_eq!(result.output.as_deref(), Some("I want an apple today."));
     assert_eq!(
         host.instructions().last(),
         Some(&Instruction::PublishTranslated {
@@ -342,12 +300,12 @@ async fn dictation_skips_model_for_pure_target_language() {
 
 /// 翻译引用了不存在的原文时，不提交不可信结果。
 #[tokio::test]
-async fn dictation_inserts_transcript_when_translation_is_untrusted() {
+async fn dictation_keeps_transcript_when_translation_is_untrusted() {
     let reply = r#"{"segments":[{"from":1,"to":2,"text":"I have "},{"from":3,"to":9,"text":"a banana"}]}"#;
-    let (result, host) = run_dictation("I have a 苹果.", reply, Delivery::Inserted).await;
+    let (result, host) = run_dictation("I have a 苹果.", reply).await;
 
     assert_eq!(result.status, RunStatus::Succeeded);
-    assert_eq!(host.inserted(), ["I have a 苹果."]);
+    assert_eq!(result.output.as_deref(), Some("I have a 苹果."));
     assert_eq!(block_ids(&host.blocks()), ["text", "notice"]);
     assert!(speaks(&host.instructions()).is_empty());
     assert!(no_pairs(&host));
@@ -360,7 +318,7 @@ async fn dictation_prompt_profiles_cover_all_language_pairs_without_leaking_pair
     for target in Language::ALL {
         for native in Language::ALL.into_iter().filter(|native| *native != target) {
             let (_directory, stores) = temporary_stores();
-            let host = FakeHost::new("sayso.dictation", "", Delivery::Inserted, stores.clone());
+            let host = FakeHost::new("sayso.dictation", "", stores.clone());
             // 每种书写系统均有字符，确保所有语言对都会经过正式的模型调用入口。
             let mut event = input_event("a 中 あ 한 я", InputSource::Speech);
             event.languages = LanguagePair { target, native };
@@ -404,11 +362,12 @@ async fn dictation_prompt_profiles_cover_all_language_pairs_without_leaking_pair
             let output: String = segments.iter().map(|segment| segment["text"].as_str().unwrap()).collect();
 
             // 把生成的例句作为输入及模型回复，验证组装、完整覆盖校验与两个词对的发布能配合工作。
-            let host = FakeHost::new("sayso.dictation", &json["output"].to_string(), Delivery::Inserted, stores);
+            let host = FakeHost::new("sayso.dictation", &json["output"].to_string(), stores);
             let mut event = input_event(transcript, InputSource::Speech);
             event.languages = LanguagePair { target, native };
-            assert_eq!(run(&plugin, &event, host.clone()).await.status, RunStatus::Succeeded);
-            assert_eq!(host.inserted(), [output], "{target:?}/{native:?}");
+            let result = run(&plugin, &event, host.clone()).await;
+            assert_eq!(result.status, RunStatus::Succeeded);
+            assert_eq!(result.output.as_deref(), Some(output.as_str()), "{target:?}/{native:?}");
             let Some(Instruction::PublishTranslated { pairs, .. }) = host.instructions().last().cloned() else {
                 panic!("expected translation pairs for {target:?}/{native:?}")
             };
@@ -424,12 +383,12 @@ async fn dictation_prompt_profiles_cover_all_language_pairs_without_leaking_pair
 async fn dictation_covers_all_japanese_chinese_spans() {
     let (_directory, stores) = temporary_stores();
     let reply = r#"{"segments":[{"from":1,"to":2,"text":"こんにちは。"},{"from":3,"to":4,"text":"わかりました。"},{"from":5,"to":6,"text":"こんにちは。"},{"from":7,"to":8,"text":"動物園に行きます。"}]}"#;
-    let host = FakeHost::new("sayso.dictation", reply, Delivery::Inserted, stores);
+    let host = FakeHost::new("sayso.dictation", reply, stores);
     let mut event = input_event("你好。わかりました。你好。我会去动物园。", InputSource::Speech);
     event.languages.target = Language::Japanese;
     let result = run(&built_in("sayso.dictation"), &event, host.clone()).await;
     assert_eq!(result.status, RunStatus::Succeeded);
-    assert_eq!(host.inserted(), ["こんにちは。わかりました。こんにちは。動物園に行きます。"]);
+    assert_eq!(result.output.as_deref(), Some("こんにちは。わかりました。こんにちは。動物園に行きます。"));
     let Some(Instruction::PublishTranslated { pairs, .. }) = host.instructions().last().cloned() else {
         panic!("expected translation pairs")
     };
@@ -450,8 +409,8 @@ async fn dictation_rejects_incomplete_or_misannotated_translations() {
         r#"{"segments":[{"from":1.5,"to":3,"text":"apples and bananas"}]}"#,
         r#"{"segments":[{"from":1,"to":3,"text":" "}]}"#,
     ] {
-        let (_, host) = run_dictation("苹果 和 香蕉", reply, Delivery::Inserted).await;
-        assert_eq!(host.inserted(), ["苹果 和 香蕉"]);
+        let (result, host) = run_dictation("苹果 和 香蕉", reply).await;
+        assert_eq!(result.output.as_deref(), Some("苹果 和 香蕉"));
         assert_eq!(block_ids(&host.blocks()), ["text", "notice"]);
         assert!(no_pairs(&host));
     }
@@ -462,12 +421,11 @@ async fn dictation_rejects_incomplete_or_misannotated_translations() {
 async fn dictation_regression_preserves_source_mapping_while_composing_the_whole_sentence() {
     let transcript = "You'd better 统一这些 behavior For example, you just Make all this behavior. To like";
     let reply = r#"{"segments":[{"from":1,"to":4,"text":"You'd better "},{"from":5,"to":5,"text":"unify these "},{"from":6,"to":6,"text":"behaviors. "},{"from":7,"to":9,"text":"For example, "},{"from":10,"to":16,"text":"you just make all this behavior. "},{"from":17,"to":18,"text":"To like"}]}"#;
-    let (result, host) = run_dictation(transcript, reply, Delivery::Inserted).await;
+    let (result, host) = run_dictation(transcript, reply).await;
     assert_eq!(result.status, RunStatus::Succeeded);
     assert_eq!(block_ids(&host.blocks()), ["text"]);
     assert_eq!(
-        host.inserted(),
-        ["You'd better unify these behaviors. For example, you just make all this behavior. To like"]
+        result.output.as_deref(), Some("You'd better unify these behaviors. For example, you just make all this behavior. To like")
     );
     let Some(Instruction::PublishTranslated { pairs, .. }) = host.instructions().last().cloned() else {
         panic!("expected translation pairs")
@@ -479,8 +437,8 @@ async fn dictation_regression_preserves_source_mapping_while_composing_the_whole
 #[tokio::test]
 async fn dictation_allows_sentence_word_order_changes_and_grammar() {
     let reply = r#"{"segments":[{"from":5,"to":5,"text":"Yesterday, "},{"from":1,"to":3,"text":"I went to "},{"from":4,"to":4,"text":"the zoo"},{"from":6,"to":6,"text":"."}]}"#;
-    let (_, host) = run_dictation("I went to 动物园 昨天.", reply, Delivery::Inserted).await;
-    assert_eq!(host.inserted(), ["Yesterday, I went to the zoo."]);
+    let (result, host) = run_dictation("I went to 动物园 昨天.", reply).await;
+    assert_eq!(result.output.as_deref(), Some("Yesterday, I went to the zoo."));
     assert_eq!(block_ids(&host.blocks()), ["text"]);
     let Some(Instruction::PublishTranslated { pairs, .. }) = host.instructions().last().cloned() else {
         panic!("expected translation pairs")
@@ -492,8 +450,8 @@ async fn dictation_allows_sentence_word_order_changes_and_grammar() {
 #[tokio::test]
 async fn dictation_keeps_original_formatting_in_references_without_constraining_output_layout() {
     let reply = r#"{"segments":[{"from":1,"to":1,"text":"I "},{"from":2,"to":3,"text":"want an apple"},{"from":4,"to":4,"text":"."}]}"#;
-    let (_, host) = run_dictation("I\t想要\r\n一个苹果.", reply, Delivery::Inserted).await;
-    assert_eq!(host.inserted(), ["I want an apple."]);
+    let (result, host) = run_dictation("I\t想要\r\n一个苹果.", reply).await;
+    assert_eq!(result.output.as_deref(), Some("I want an apple."));
     assert_eq!(block_ids(&host.blocks()), ["text"]);
     let Some(Instruction::PublishTranslated { pairs, .. }) = host.instructions().last().cloned() else {
         panic!("expected translation pairs")
@@ -506,7 +464,7 @@ async fn dictation_keeps_original_formatting_in_references_without_constraining_
 async fn selection_translates_speaks_and_publishes() {
     let (_directory, stores) = temporary_stores();
     let host =
-        FakeHost::new("sayso.selection", r#"{"from":"en","translation":"意外发现"}"#, Delivery::Inserted, stores);
+        FakeHost::new("sayso.selection", r#"{"from":"en","translation":"意外发现"}"#, stores);
     let result = run(&built_in("sayso.selection"), &input_event("serendipity", InputSource::Selection), host.clone()).await;
 
     assert_eq!(result.status, RunStatus::Succeeded);
@@ -524,7 +482,7 @@ async fn selection_translates_speaks_and_publishes() {
 
     // 第三种语言（不是目标语言也不是本地语言）：译为本地语言并显示，不朗读，广播的词对为空。
     let (_directory, stores) = temporary_stores();
-    let host = FakeHost::new("sayso.selection", r#"{"from":"fr","translation":"巅峰"}"#, Delivery::Inserted, stores);
+    let host = FakeHost::new("sayso.selection", r#"{"from":"fr","translation":"巅峰"}"#, stores);
     let result = run(&built_in("sayso.selection"), &input_event("apogée", InputSource::Selection), host.clone()).await;
     assert_eq!(result.status, RunStatus::Succeeded);
     assert_eq!(block_ids(&host.blocks()), ["translation", "original"]);
@@ -540,7 +498,7 @@ async fn selection_translates_speaks_and_publishes() {
     );
 
     let (_directory, stores) = temporary_stores();
-    let host = FakeHost::new("sayso.selection", r#"{"translation":"x"}"#, Delivery::Inserted, stores);
+    let host = FakeHost::new("sayso.selection", r#"{"translation":"x"}"#, stores);
     let result = run(&built_in("sayso.selection"), &input_event("y", InputSource::Selection), host.clone()).await;
     assert!(matches!(result.status, RunStatus::Failed { .. }));
     assert!(host.blocks().is_empty());
@@ -561,7 +519,7 @@ async fn wordbook_attaches_add_buttons_and_counts_each_word_once_per_candidate_b
     ) -> Vec<(String, Vec<BlockAction>)> {
         let event =
             Event::new(LanguagePair::default(), Some(SurfaceSnapshot { id: surface.into(), blocks: vec![] }), payload);
-        let host = FakeHost::new("sayso.wordbook", "", Delivery::Inserted, stores.clone());
+        let host = FakeHost::new("sayso.wordbook", "", stores.clone());
         let result = run(wordbook, &event, host.clone()).await;
         assert_eq!(result.status, RunStatus::Succeeded, "{result:?}");
         assert!(host.blocks().is_empty());
@@ -655,8 +613,8 @@ async fn wordbook_attaches_add_buttons_and_counts_each_word_once_per_candidate_b
 async fn dictation_learning_pairs_do_not_depend_on_model_language_labels() {
     let transcript = "I have a 苹果.";
     let reply = r#"{"segments":[{"from":1,"to":5,"text":"I have an apple."}]}"#;
-    let (_, dictation) = run_dictation(transcript, reply, Delivery::Inserted).await;
-    assert_eq!(dictation.inserted(), ["I have an apple."]);
+    let (result, dictation) = run_dictation(transcript, reply).await;
+    assert_eq!(result.output.as_deref(), Some("I have an apple."));
     let Some(Instruction::PublishTranslated { output, pairs, context, .. }) = dictation.instructions().last().cloned()
     else {
         panic!("a translated sentence must publish learning pairs")
@@ -666,7 +624,7 @@ async fn dictation_learning_pairs_do_not_depend_on_model_language_labels() {
     let pairs =
         pairs.into_iter().map(|pair| TranslationPair { card: Some("sayso.dictation/@term-0".into()), ..pair }).collect();
     let (_directory, stores) = temporary_stores();
-    let wordbook = FakeHost::new("sayso.wordbook", "", Delivery::Inserted, stores);
+    let wordbook = FakeHost::new("sayso.wordbook", "", stores);
     let event = Event::new(
         LanguagePair::default(),
         Some(SurfaceSnapshot { id: "s".into(), blocks: vec![] }),
@@ -690,8 +648,8 @@ async fn dictation_learning_pairs_do_not_depend_on_model_language_labels() {
 #[tokio::test]
 async fn dictation_learning_annotations_ignore_typographic_changes() {
     let reply = r#"{"segments":[{"from":1,"to":3,"text":"HELLO world! "},{"from":4,"to":5,"text":"an apple."}]}"#;
-    let (_, host) = run_dictation("Hello world. 一个苹果。", reply, Delivery::Inserted).await;
-    assert_eq!(host.inserted(), ["HELLO world! an apple."]);
+    let (result, host) = run_dictation("Hello world. 一个苹果。", reply).await;
+    assert_eq!(result.output.as_deref(), Some("HELLO world! an apple."));
     let Some(Instruction::PublishTranslated { pairs, .. }) = host.instructions().last().cloned() else {
         panic!("expected the actual translation pair")
     };
@@ -705,15 +663,13 @@ async fn dictation_accepts_rewritten_punctuation_without_losing_learning_pairs()
         let reply = format!(
             r#"{{"segments":[{{"from":1,"to":4,"text":"You'd better "}},{{"from":5,"to":5,"text":"unify these "}},{{"from":6,"to":6,"text":"behaviors. "}},{{"from":7,"to":9,"text":"For example, "}},{{"from":10,"to":12,"text":"you just make "}},{{"from":13,"to":15,"text":"all this behavior "}}{punctuation},{{"from":17,"to":18,"text":"to like"}}]}}"#
         );
-        let (_, host) = run_dictation(
+        let (result, host) = run_dictation(
             "You'd better 统一这些 behavior For example, you just Make all this behavior. To like",
             &reply,
-            Delivery::Inserted,
         )
         .await;
         assert_eq!(
-            host.inserted(),
-            ["You'd better unify these behaviors. For example, you just make all this behavior to like"]
+            result.output.as_deref(), Some("You'd better unify these behaviors. For example, you just make all this behavior to like")
         );
         assert_eq!(block_ids(&host.blocks()), ["text"]);
         assert!(
@@ -727,11 +683,12 @@ async fn dictation_accepts_rewritten_punctuation_without_losing_learning_pairs()
 async fn dictation_accepts_clause_reordering_without_per_span_word_output_requirements() {
     let (_directory, stores) = temporary_stores();
     let reply = r#"{"segments":[{"from":1,"to":2,"text":"她对我说"},{"from":3,"to":4,"text":"你好"},{"from":5,"to":7,"text":"。"}]}"#;
-    let host = FakeHost::new("sayso.dictation", reply, Delivery::Inserted, stores);
+    let host = FakeHost::new("sayso.dictation", reply, stores);
     let mut event = input_event("She said nee how to me.", InputSource::Speech);
     event.languages = LanguagePair { target: Language::Chinese, native: Language::English };
-    assert_eq!(run(&built_in("sayso.dictation"), &event, host.clone()).await.status, RunStatus::Succeeded);
-    assert_eq!(host.inserted(), ["她对我说你好。"]);
+    let result = run(&built_in("sayso.dictation"), &event, host.clone()).await;
+    assert_eq!(result.status, RunStatus::Succeeded);
+    assert_eq!(result.output.as_deref(), Some("她对我说你好。"));
     assert_eq!(block_ids(&host.blocks()), ["text"]);
     let Some(Instruction::PublishTranslated { pairs, .. }) = host.instructions().last().cloned() else {
         panic!("expected the restored target-language expression")
@@ -759,7 +716,7 @@ fn install(root: &std::path::Path, manifest: &str, files: &[(&str, &str)]) -> Pl
 
 fn manifest(capabilities: &str, timeout: u32) -> String {
     format!(
-        r#"{{"schemaVersion":4,"id":"test.plugin","name":"Test","main":"main.js","timeoutSeconds":{timeout},
+        r#"{{"schemaVersion":5,"id":"test.plugin","name":"Test","main":"main.js","timeoutSeconds":{timeout},
             "events":["translated","action"],"capabilities":{capabilities}}}"#
     )
 }
@@ -774,7 +731,7 @@ fn extensions_subscribe_to_input_events() {
         let root = tempfile::tempdir().unwrap();
         let directory = root.path().join("plugin");
         std::fs::create_dir_all(&directory).unwrap();
-        let manifest = format!(r#"{{"schemaVersion":4,"id":"test.plugin","name":"Test","main":"main.js",{extra}}}"#);
+        let manifest = format!(r#"{{"schemaVersion":5,"id":"test.plugin","name":"Test","main":"main.js",{extra}}}"#);
         std::fs::write(directory.join("extension.json"), manifest).unwrap();
         std::fs::write(directory.join("main.js"), "").unwrap();
         let (plugins, problems) = load_installed(root.path(), &HashSet::new());
@@ -783,7 +740,7 @@ fn extensions_subscribe_to_input_events() {
 }
 
 /// 未声明的能力被拒绝并记为警告，插件仍能继续；相对导入只在扩展目录内解析；
-/// 只有 input 处理函数能直接写入其他应用。
+/// 未声明 transform 的 input 处理函数无权改变文本。
 #[tokio::test]
 async fn runtime_enforces_capabilities_and_resolves_imports() {
     let root = tempfile::tempdir().unwrap();
@@ -803,12 +760,12 @@ async fn runtime_enforces_capabilities_and_resolves_imports() {
                   sayso.blocks.upsert({ id: "r", type: "status", message: label(event.output),
                     actions: [{ type: "invoke", label: "Go" }] });
                 }
-                export async function action() { await sayso.insert("x"); }"#,
+                export async function input() { return "changed"; }"#,
             ),
         ],
     );
     let (_directory, stores) = temporary_stores();
-    let host = FakeHost::new("test.plugin", "", Delivery::Inserted, stores);
+    let host = FakeHost::new("test.plugin", "", stores);
 
     let result = run(&plugin, &translated("hi", "hi", vec![], None), host.clone()).await;
     assert_eq!(result.status, RunStatus::Succeeded);
@@ -818,9 +775,9 @@ async fn runtime_enforces_capabilities_and_resolves_imports() {
     assert_eq!(message, "got hi");
     assert_eq!(host.completions.load(Ordering::SeqCst), 0);
 
-    let result = run(&plugin, &click(&host.blocks()[0]), host.clone()).await;
-    assert!(matches!(result.status, RunStatus::Failed { .. }), "{result:?}");
-    assert!(host.inserted().is_empty());
+    let result = run(&plugin, &input_event("original", InputSource::Speech), host).await;
+    assert!(matches!(result.status, RunStatus::Failed { ref message } if message.contains("transform")), "{result:?}");
+    assert_eq!(result.output, None);
 }
 
 /// 同步死循环也会在超时后被打断。
@@ -834,7 +791,7 @@ async fn runtime_interrupts_busy_loops() {
     let result = run(
         &plugin,
         &translated("hi", "hi", vec![], None),
-        FakeHost::new("test.plugin", "", Delivery::Inserted, stores),
+        FakeHost::new("test.plugin", "", stores),
     )
     .await;
     assert_eq!(result.status, RunStatus::TimedOut);
@@ -858,7 +815,7 @@ async fn shell_requires_its_own_capability() {
         )],
     );
     let (_directory, stores) = temporary_stores();
-    let host = FakeHost::new("test.plugin", "", Delivery::Inserted, stores);
+    let host = FakeHost::new("test.plugin", "", stores);
     let result = run(&plugin, &translated("", "", vec![], None), host).await;
     assert_eq!(result.status, RunStatus::Succeeded);
     assert!(result.log.contains("Capability not declared: shell"), "{result:?}");
@@ -894,7 +851,7 @@ async fn shell_runs_portable_scripts_and_preserves_results() {
     std::fs::create_dir(&workspace).unwrap();
     let (_directory, stores) = temporary_stores();
     let result =
-        run(&plugin, &translated("", "", vec![], None), FakeHost::new("test.plugin", "", Delivery::Inserted, stores))
+        run(&plugin, &translated("", "", vec![], None), FakeHost::new("test.plugin", "", stores))
             .await;
     assert_eq!(result.status, RunStatus::Succeeded, "{result:?}");
     assert_eq!(std::fs::read_to_string(workspace.join("input.txt")).unwrap(), "中文 ; $literal\n");
@@ -936,7 +893,7 @@ async fn shell_bounds_output_and_rejects_invalid_requests() {
     std::fs::write(plugin.directory().unwrap().join("binary.bin"), vec![0xff; 600_000]).unwrap();
     let (_directory, stores) = temporary_stores();
     let result =
-        run(&plugin, &translated("", "", vec![], None), FakeHost::new("test.plugin", "", Delivery::Inserted, stores))
+        run(&plugin, &translated("", "", vec![], None), FakeHost::new("test.plugin", "", stores))
             .await;
     assert_eq!(result.status, RunStatus::Succeeded, "{result:?}");
 }
@@ -1026,7 +983,7 @@ async fn shell_stops_processes_on_timeouts_and_event_completion() {
         let result = run(
             &plugin,
             &translated("", "", vec![], None),
-            FakeHost::new("test.plugin", "", Delivery::Inserted, stores),
+            FakeHost::new("test.plugin", "", stores),
         )
         .await;
         match mode {
@@ -1062,7 +1019,7 @@ async fn shell_stops_processes_when_the_invocation_is_aborted() {
     );
     let plugin = install(root.path(), &manifest(r#"["shell"]"#, 5), &[("main.js", &source)]);
     let (_directory, stores) = temporary_stores();
-    let host = FakeHost::new("test.plugin", "", Delivery::Inserted, stores);
+    let host = FakeHost::new("test.plugin", "", stores);
     let task = tokio::spawn(async move { run(&plugin, &translated("", "", vec![], None), host).await });
     wait_for_shell_marker(&marker).await;
     task.abort();
@@ -1098,7 +1055,7 @@ async fn examples_load_and_handle_events() {
     };
 
     // 收藏夹：只在短词的卡片上附加「收藏」，整句跳过；点击后累计次数，按钮换成不可点击的「已收藏」。
-    let host = FakeHost::new("com.sayso.example.favorites", "", Delivery::Inserted, stores.clone());
+    let host = FakeHost::new("com.sayso.example.favorites", "", stores.clone());
     assert_eq!(run(&example("favorites"), &sentence(), host.clone()).await.status, RunStatus::Succeeded);
     let attached = host.attachments();
     assert_eq!(attached.iter().map(|(card, _)| card.as_str()).collect::<Vec<_>>(), ["sayso.dictation/@term-0"]);
@@ -1113,7 +1070,7 @@ async fn examples_load_and_handle_events() {
     assert_eq!((card.as_str(), saved[0].disabled), ("sayso.dictation/@term-0", true));
 
     // 语法讲解：翻译完毕只在整句卡片上附加按钮，点击后才调用模型讲解写入的整句。
-    let host = FakeHost::new("com.sayso.example.explain", "• Present simple.", Delivery::Inserted, stores.clone());
+    let host = FakeHost::new("com.sayso.example.explain", "• Present simple.", stores.clone());
     assert_eq!(run(&example("explain"), &sentence(), host.clone()).await.status, RunStatus::Succeeded);
     assert_eq!(host.completions.load(Ordering::SeqCst), 0);
     let attached = host.attachments();
@@ -1135,7 +1092,7 @@ async fn examples_load_and_handle_events() {
     let config = serde_json::json!({ "vault": vault.path(), "notePath": "Sayso/{date}.md" });
     std::fs::write(copy.path().join("config.json"), config.to_string()).unwrap();
     let obsidian = sayso_core::plugin::load_one(copy.path()).unwrap();
-    let host = FakeHost::new("com.sayso.example.obsidian", "", Delivery::Inserted, stores.clone());
+    let host = FakeHost::new("com.sayso.example.obsidian", "", stores.clone());
     assert_eq!(run(&obsidian, &sentence(), host.clone()).await.status, RunStatus::Succeeded);
     assert!(!vault.path().join("Sayso").exists());
     // 整句卡片与两张词条卡片各有一个按钮；点整句卡片上的记下整次翻译。

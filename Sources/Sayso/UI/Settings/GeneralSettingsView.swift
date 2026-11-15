@@ -54,6 +54,12 @@ struct GeneralSettingsView: View {
                 }
             }
 
+            SettingsSection(L("候选框", "Candidate window")) {
+                SettingsRow(title: L("窗口位置", "Window position")) {
+                    CandidatePositionPicker(positions: candidateCorners(), selection: model.binding(\.candidateCorner))
+                }
+            }
+
             SettingsSection(L("朗读", "Pronunciation")) {
                 SettingsRow(title: L("自动朗读", "Read aloud")) {
                     Toggle(L("生成翻译块时自动朗读", "Read translated blocks aloud"), isOn: model.binding(\.autoSpeak))

@@ -50,6 +50,8 @@ fn settings_survive_native_handle_recreation_and_invalid_requests_remain_errors(
         let mut settings = client.call("settings", Value::Null);
         assert!(settings["shortcuts"].as_array().unwrap().iter().any(|s| s["key"]["keyCode"] == 0xA3));
         settings["targetLanguage"] = json!("ja");
+        assert_eq!(settings["candidateCorner"], "bottomRight");
+        settings["candidateCorner"] = json!("topRight");
         client.call("updateSettings", settings);
         for request in ["{", r#"{"method":"unknown"}"#, r#"{"method":"updateSettings","args":{}}"#] {
             let request = CString::new(request).unwrap();
@@ -59,7 +61,13 @@ fn settings_survive_native_handle_recreation_and_invalid_requests_remain_errors(
         assert_eq!(client.call("settings", Value::Null)["targetLanguage"], "ja");
     }
     let client = Client::new(directory.path());
-    assert_eq!(client.call("settings", Value::Null)["targetLanguage"], "ja");
+    let settings = client.call("settings", Value::Null);
+    assert_eq!(settings["targetLanguage"], "ja");
+    assert_eq!(settings["candidateCorner"], "topRight");
+    let positions = client.call("candidateCorners", Value::Null);
+    assert_eq!(positions.as_array().unwrap().len(), 4);
+    let position = positions.as_array().unwrap().iter().find(|p| p["value"] == settings["candidateCorner"]).unwrap();
+    assert_eq!((position["horizontal"].as_i64(), position["vertical"].as_i64()), (Some(1), Some(-1)));
 }
 
 #[test]
@@ -67,7 +75,7 @@ fn extension_package_roundtrip_preserves_code_and_updates_core_catalog() {
     let directory = tempfile::tempdir().unwrap();
     let extension = directory.path().join("Extensions/example");
     std::fs::create_dir_all(&extension).unwrap();
-    let manifest = json!({"schemaVersion":4,"id":"test.package","name":"Package test","main":"main.js","events":["translated"],"capabilities":["blocks"]});
+    let manifest = json!({"schemaVersion":5,"id":"test.package","name":"Package test","main":"main.js","events":["translated"],"capabilities":["blocks"]});
     std::fs::write(extension.join("extension.json"), manifest.to_string()).unwrap();
     std::fs::write(
         extension.join("main.js"),

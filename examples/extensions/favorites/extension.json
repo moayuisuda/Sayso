@@ -1,5 +1,5 @@
 {
-  "schemaVersion": 4,
+  "schemaVersion": 5,
   "id": "com.sayso.example.favorites",
   "name": "收藏夹 / Favorites",
   "description": "在翻译出的单词卡片上显示收藏按钮，收藏的词显示在「收藏」页签 / Adds a Favorite button to translated word cards and lists them in a Favorites tab",

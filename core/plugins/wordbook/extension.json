@@ -1,5 +1,5 @@
 {
-  "schemaVersion": 4,
+  "schemaVersion": 5,
   "id": "sayso.wordbook",
   "name": "生词本 / Wordbook",
   "description": "把翻译出的单词、短语加入生词本 / Save translated words and phrases to your wordbook",

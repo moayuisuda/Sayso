@@ -1,5 +1,5 @@
 {
-  "schemaVersion": 4,
+  "schemaVersion": 5,
   "id": "com.sayso.example.explain",
   "name": "语法讲解 / Grammar",
   "description": "翻译完成后显示「讲解语法」按钮，用你在 Sayso 中配置的模型讲解这句外语，不需要自带 API Key / Adds an Explain grammar button after each translation, using the model you configured in Sayso",

@@ -49,7 +49,8 @@ public partial class App : Application
             core = await Task.Run(() => new CoreClient(DataDirectory, Version, platform.Handle));
             platform.Core = core;
             settings = new SettingsWindow(core, platform);
-            candidate = new CandidateWindow(core, settings.L, settings.Show, () => platform.AudioLevel);
+            candidate = new CandidateWindow(core, settings.L, settings.Show, () => platform.AudioLevel,
+                () => settings.CandidatePlacement);
             hotkeys = new HotkeyMonitor(core, action => settings.Run(action), candidate.Dismiss,
                 arguments.Contains("--smoke-test") ? SmokeTests.InputTag : null);
             settings.Hotkeys = hotkeys;
@@ -87,7 +88,13 @@ public partial class App : Application
         switch (method)
         {
             case "sessionChanged": candidate!.Update(value!); break;
-            case "settingsChanged": settings.Run(settings.ReloadSettings); break;
+            case "settingsChanged":
+                settings.Run(async () =>
+                {
+                    await settings.ReloadSettings();
+                    candidate?.RefreshPosition();
+                });
+                break;
             case "extensionsChanged": settings.Run(settings.ReloadExtensions); break;
             case "storeChanged": settings.RefreshStore(value!.GetValue<string>()); break;
             case "updateAvailable":

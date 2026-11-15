@@ -1,5 +1,5 @@
 {
-  "schemaVersion": 4,
+  "schemaVersion": 5,
   "id": "sayso.context",
   "name": "应用背景 / App Context",
   "description": "按当前应用提供背景，让语音识别与翻译的专业词汇更准确。写明你的身份、常说的领域或常用词即可 / Give the speech and translation models a background for each app so domain terms come out right",

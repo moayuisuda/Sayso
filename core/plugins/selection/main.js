@@ -27,6 +27,7 @@ export async function input(event) {
   if (pair !== null) sayso.speak(pair.target, target.code);
   // 译文块是整次翻译的卡片，订阅者可在上面附加按钮。
   sayso.publish({ type: "translated", output: translation, pairs: pair === null ? [] : [pair], context: null, card: "translation" });
+  return translation;
 }
 
 function systemPrompt() {

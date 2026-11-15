@@ -1,5 +1,5 @@
 {
-  "schemaVersion": 4,
+  "schemaVersion": 5,
   "id": "com.sayso.example.obsidian",
   "name": "Obsidian 记录 / Obsidian Log",
   "description": "在整句卡片与每张词条卡片上显示「记到 Obsidian」按钮，点击后把整次翻译或单个词条写成卡片，追加到当天的笔记 / Adds Save to Obsidian buttons to the translation card and each word card that append the translation or the word to today's note as a card",

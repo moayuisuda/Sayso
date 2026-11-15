@@ -6,7 +6,8 @@ use serde::Serialize;
 
 use crate::error::CoreError;
 use crate::protocol::{
-    Block, BlockAction, BlockContent, Language, SurfaceSnapshot, Tone, TranslationPair, SAYSO_BLOCK_PREFIX,
+    Block, BlockAction, BlockContent, Language, SurfaceSnapshot, TextRole, TextRun, Tone, TranslationPair,
+    SAYSO_BLOCK_PREFIX,
 };
 
 /// Sayso 自身的状态提示（错误、扩展失败等）所用的块来源。
@@ -69,7 +70,7 @@ pub struct SurfaceView {
     pub sections: Vec<SurfaceSection>,
     /// 附加在整句卡片上、针对整次翻译的按钮，显示在底部操作栏，不随整句卡片显示。
     pub footer: Vec<Attachment>,
-    /// 仍有扩展在处理本次事件。
+    /// 流程仍在处理或交付本次结果。
     pub working: bool,
 }
 
@@ -79,7 +80,7 @@ pub(crate) struct Surface {
     sections: Vec<SurfaceSection>,
     /// 整句卡片的引用（`来源 id/块 id`）：附加在它们上面的按钮显示在底部操作栏。
     translation_cards: Vec<String>,
-    /// 仍在处理本次事件的扩展。
+    /// 尚未完成的处理与交付数量。
     running: usize,
     /// 发送端只由本候选框持有，关闭或替换候选框后，shell 的接收端立即得到关闭通知。
     shell_lifetime: tokio::sync::watch::Sender<()>,
@@ -112,6 +113,25 @@ impl Surface {
         let mut surface = Surface::new(input, hold::FAILURE);
         surface.upsert(failure_block(message), APP_SOURCE, None);
         surface
+    }
+
+    /// 中间件可用主文本块提供高亮和操作。如果它已展示最终文本，直接复用。
+    pub fn present_output(&mut self, text: &str) {
+        if self.blocks().any(|item| {
+            matches!(&item.block.content, BlockContent::Text { runs, role: Some(TextRole::Primary) }
+                if runs.iter().map(|run| run.text.as_str()).collect::<String>() == text)
+        }) {
+            return;
+        }
+        let block = Block {
+            id: "output".into(),
+            content: BlockContent::Text {
+                runs: vec![TextRun { text: text.into(), style: None, action: None }],
+                role: Some(TextRole::Primary),
+            },
+            actions: vec![],
+        };
+        self.upsert(block, APP_SOURCE, None);
     }
 
     /// 新增块，或按 id 替换该来源已有的块；替换时保留其他扩展附加的按钮。

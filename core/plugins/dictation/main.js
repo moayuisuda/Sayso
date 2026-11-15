@@ -1,7 +1,4 @@
-// 内置扩展「混说翻译」：用目标语言说话，不会的词用本地语言说，翻译成完整的目标语言句子后写入前台应用。
-//
-// 收到语音文本 → 混说翻译（sayso.llm）→ 写入（sayso.insert）→ 输出文本块与提示 → 朗读翻译块 → 广播 translated hook，
-// Sayso 为其中的词对画出词条卡片，生词本等事件式扩展再往卡片上附加按钮。翻译失败时原样写入识别结果，保证说的话不丢。
+// 混说翻译中间件：处理语音文本，返回译文供 Sayso 写入，发布高亮和学习词对。
 
 import { createDictationPrompt } from "./prompt.js";
 import { referenceTranscript, readTranslationReply, assembleTranslation } from "./transcript.js";
@@ -20,16 +17,6 @@ export async function runDictation(event, { promptSuffix = "", wordPairs } = {})
   const { segments, notice, reply } = await compose(event.input.text, promptSuffix);
   const output = segments.map((segment) => segment.text).join("");
   sayso.blocks.upsert(textBlock(segments));
-  try {
-    const delivery = await sayso.insert(output);
-    if (delivery === "copiedToClipboard") {
-      const message = chinese ? "未能写入目标应用，已复制到剪贴板" : "Could not insert into the target app; copied to clipboard";
-      sayso.blocks.upsert(statusBlock("clipboard", message, "info", "doc.on.clipboard"));
-    }
-  } catch (error) {
-    const prefix = chinese ? "输入失败：" : "Insertion failed: ";
-    sayso.blocks.upsert(statusBlock("insertion", prefix + error.message, "error", "exclamationmark.circle"));
-  }
   if (notice) sayso.blocks.upsert(statusBlock("notice", notice, "warning", "exclamationmark.circle"));
 
   const phrases = segments.filter(isTranslation).map((segment) => ({ target: segment.text, native: segment.source }));
@@ -44,8 +31,9 @@ export async function runDictation(event, { promptSuffix = "", wordPairs } = {})
       sayso.blocks.upsert(statusBlock("words", prefix + error.message, "warning", "exclamationmark.circle"));
     }
   }
-  // 每次都广播，纯目标语言输入时词对为空，订阅者仍能拿到写入的整句，并在整句卡片（text 块）上附加按钮。
+  // 即使词对为空，订阅者也能在整句卡片上附加按钮。
   sayso.publish({ type: "translated", output, pairs, context: output, card: TEXT });
+  return output;
 }
 
 /**

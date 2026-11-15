@@ -11,7 +11,7 @@ use crate::extensions::Route;
 use crate::l10n::tr;
 use crate::llm::with_user_context;
 use crate::plugin::{run, Host, Instruction, Plugin, RunResult, RunStatus};
-use crate::protocol::{AppInfo, Delivery, Event, EventType, Input, Payload, Translation};
+use crate::protocol::{AppInfo, Block, Delivery, Event, Input, InputSource, Payload, Tone, Translation};
 use crate::store::StoreRecord;
 
 pub(crate) struct PreparedDispatch {
@@ -21,10 +21,15 @@ pub(crate) struct PreparedDispatch {
 }
 
 impl PreparedDispatch {
-    pub fn attach_surface(&mut self, surface: &mut Surface) {
-        surface.mark_running(self.recipients.len());
+    fn attach_surface(&mut self, surface: &mut Surface, work: usize) {
+        surface.mark_running(work);
         self.event.surface = Some(surface.snapshot());
         self.shell_lifetime = Some(surface.shell_lifetime());
+    }
+
+    pub fn attach_input_surface(&mut self, surface: &mut Surface) {
+        // 额外的一项代表应用交付，即使没有订阅者也要等它完成。
+        self.attach_surface(surface, self.recipients.len() + 1);
     }
 }
 
@@ -36,7 +41,8 @@ impl Inner {
             return;
         }
         if let Some(id) = surface_id {
-            self.update_surface(id, |surface| dispatch.attach_surface(surface));
+            let work = dispatch.recipients.len();
+            self.update_surface(id, |surface| dispatch.attach_surface(surface, work));
         }
         self.run_dispatch(dispatch);
     }
@@ -48,39 +54,95 @@ impl Inner {
         PreparedDispatch { event, recipients, shell_lifetime: None }
     }
 
-    pub(crate) fn run_dispatch(self: &Arc<Self>, dispatch: PreparedDispatch) {
-        let PreparedDispatch { event, recipients, shell_lifetime } = dispatch;
-        let surface_id = event.surface.as_ref().map(|surface| surface.id.clone());
-        let input_context = match &event.payload {
-            Payload::Input { input, source } => {
-                Some(InputContext { input: input.clone(), source: source.clone() })
-            }
-            _ => None,
-        };
-        let focus = match &event.payload {
-            Payload::Focus { app } => Some(app.clone()),
-            _ => None,
-        };
-
+    /// 每个输入中间件读取当前文本，最后由 Sayso 按输入来源交付一次。
+    pub(crate) async fn run_input(self: &Arc<Self>, dispatch: PreparedDispatch) {
+        let PreparedDispatch { mut event, recipients, shell_lifetime } = dispatch;
+        let surface_id = event.surface.as_ref().expect("input has a candidate box").id.clone();
         for plugin in recipients {
-            let manifest = &plugin.manifest;
-            let host = Arc::new(DispatchHost {
-                inner: self.clone(),
-                extension_id: manifest.id.clone(),
-                // 内置扩展的内容视同应用自身，不显示扩展名称。
-                title: (!manifest.is_built_in()).then(|| manifest.name.clone()),
-                surface_id: surface_id.clone(),
-                input: input_context.clone(),
-                focus: focus.clone(),
-                shell_lifetime: shell_lifetime.clone(),
-            });
-            let reports_failure = event.event_type() == EventType::Input;
-            let (inner, event, surface_id) = (self.clone(), event.clone(), surface_id.clone());
+            if let Some(snapshot) = self.update_surface(&surface_id, |surface| surface.snapshot()) {
+                event.surface = Some(snapshot);
+            }
+            let result = self.run_plugin(&plugin, &event, shell_lifetime.clone()).await;
+            if let Some(output) = &result.output {
+                let Payload::Input { input, .. } = &mut event.payload else { unreachable!() };
+                input.text.clone_from(output);
+            }
+            self.finish_run(result, Some(&surface_id), true);
+        }
+
+        let Payload::Input { input, source } = event.payload else { unreachable!() };
+        self.update_surface(&surface_id, |surface| surface.present_output(&input.text));
+        let status = match input.via {
+            InputSource::Selection => None,
+            InputSource::Speech => match self
+                .insert(input.text, source, APP_SOURCE.into(), Some(surface_id.clone()))
+                .await
+            {
+                Ok(Delivery::Inserted) => None,
+                Ok(Delivery::CopiedToClipboard) => Some(Block::status(
+                    "insertion",
+                    tr("未能写入目标应用，已复制到剪贴板", "Could not insert into the target app; copied to clipboard"),
+                    Tone::Info,
+                    "doc.on.clipboard",
+                )),
+                Err(error) => {
+                    log::error!("speech insertion failed: {error}");
+                    Some(Block::status(
+                        "insertion",
+                        format!("{}{error}", tr("输入失败：", "Insertion failed: ")),
+                        Tone::Error,
+                        "exclamationmark.triangle.fill",
+                    ))
+                }
+            },
+        };
+        self.update_session(|session| {
+            session.input_pending = false;
+            let Phase::Presenting(surface) = &mut session.phase else { return };
+            if surface.id != surface_id {
+                return;
+            }
+            if let Some(status) = status {
+                surface.upsert(status, APP_SOURCE, None);
+            }
+            surface.mark_finished();
+        });
+    }
+
+    fn run_dispatch(self: &Arc<Self>, dispatch: PreparedDispatch) {
+        let PreparedDispatch { event, recipients, shell_lifetime } = dispatch;
+        for plugin in recipients {
+            let (inner, event, shell_lifetime) = (self.clone(), event.clone(), shell_lifetime.clone());
             self.runtime.spawn(async move {
-                let result = run(&plugin, &event, host).await;
-                inner.finish_run(result, surface_id.as_deref(), reports_failure);
+                let result = inner.run_plugin(&plugin, &event, shell_lifetime).await;
+                inner.finish_run(result, event.surface.as_ref().map(|surface| surface.id.as_str()), false);
             });
         }
+    }
+
+    async fn run_plugin(
+        self: &Arc<Self>,
+        plugin: &Plugin,
+        event: &Event,
+        shell_lifetime: Option<tokio::sync::watch::Receiver<()>>,
+    ) -> RunResult {
+        let manifest = &plugin.manifest;
+        let host = Arc::new(DispatchHost {
+            inner: self.clone(),
+            extension_id: manifest.id.clone(),
+            title: (!manifest.is_built_in()).then(|| manifest.name.clone()),
+            surface_id: event.surface.as_ref().map(|surface| surface.id.clone()),
+            input: match &event.payload {
+                Payload::Input { input, source } => Some(InputContext { input: input.clone(), source: source.clone() }),
+                _ => None,
+            },
+            focus: match &event.payload {
+                Payload::Focus { app } => Some(app.clone()),
+                _ => None,
+            },
+            shell_lifetime,
+        });
+        run(plugin, event, host).await
     }
 
     /// 前台应用切换：同一应用的重复上报（如切换窗口）不广播。
@@ -155,7 +217,7 @@ impl Inner {
     }
 }
 
-/// 广播的输入与触发时的前台应用：`publish` 的翻译事件与 `insert` 的写入目标都来自这里。
+/// 当前中间件看到的文本及触发时的前台应用，用来构造它发布的翻译事件。
 #[derive(Clone)]
 struct InputContext {
     input: Input,
@@ -261,13 +323,6 @@ impl Host for DispatchHost {
         let endpoint = self.inner.llm_endpoint().ok_or(CoreError::ModelNotConfigured)?;
         let system = with_user_context(&system, &self.inner.context());
         endpoint.complete(&self.inner.http, &system, &user).await
-    }
-
-    /// 写入触发输入时的前台应用。
-    async fn insert(&self, text: String) -> Result<Delivery, CoreError> {
-        let input = self.input.as_ref().ok_or(CoreError::InsertOutsideInput)?;
-        let by = self.extension_id.clone();
-        self.inner.insert(text, input.source.clone(), by, self.surface_id.clone()).await
     }
 
     fn records(&self, collection: &str) -> Result<Vec<StoreRecord>, CoreError> {

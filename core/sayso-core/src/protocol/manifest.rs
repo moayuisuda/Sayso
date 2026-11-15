@@ -102,6 +102,9 @@ impl Manifest {
         if self.events.is_empty() {
             return fail("at least one event subscription is required".into());
         }
+        if self.grants(Capability::Transform) && !self.events.contains(&EventType::Input) {
+            return fail("transform requires an input subscription".into());
+        }
         if self.main.trim().is_empty() {
             return fail("main is required".into());
         }

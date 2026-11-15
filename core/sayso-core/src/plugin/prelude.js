@@ -27,7 +27,6 @@
       set: (text) => emit("context.set", { text }),
     }),
     llm: (system, user) => native.llm(system, user),
-    insert: (text) => native.insert(text),
     shell: Object.freeze({
       run: async (script, options = {}) => JSON.parse(await native.shell(script, JSON.stringify(options))),
     }),

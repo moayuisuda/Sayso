@@ -17,7 +17,7 @@ pub use instruction::Instruction;
 pub use runtime::run;
 
 use crate::error::CoreError;
-use crate::protocol::{Delivery, Manifest};
+use crate::protocol::Manifest;
 use crate::store::StoreRecord;
 
 /// 一个已加载的插件。
@@ -55,8 +55,6 @@ pub trait Host: Send + Sync {
     fn apply(&self, instruction: Instruction) -> Result<(), CoreError>;
     /// 用用户配置的翻译模型补全。
     async fn complete(&self, system: String, user: String) -> Result<String, CoreError>;
-    /// 写入触发输入时的前台应用，返回投递方式。
-    async fn insert(&self, text: String) -> Result<Delivery, CoreError>;
     /// 读取本插件的某个数据集合。
     fn records(&self, collection: &str) -> Result<Vec<StoreRecord>, CoreError>;
     /// 候选框的生命周期；发送端销毁时停止该事件启动的 shell。后台事件没有候选框。
@@ -68,6 +66,8 @@ pub trait Host: Send + Sync {
 pub struct RunResult {
     pub extension_id: String,
     pub status: RunStatus,
+    /// 输入中间件返回的下一步文本；无返回值时沿用输入。
+    pub output: Option<String>,
     /// 被忽略的指令等非致命问题。
     pub warnings: Vec<String>,
     /// `console.*` 输出的末尾部分。

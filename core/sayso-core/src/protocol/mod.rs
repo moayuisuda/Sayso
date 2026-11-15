@@ -15,7 +15,7 @@ pub use language::*;
 pub use manifest::*;
 
 /// 扩展协议版本。删除字段或改变字段语义时提升；新增字段、事件、块类型不提升。
-pub const SCHEMA_VERSION: u32 = 4;
+pub const SCHEMA_VERSION: u32 = 5;
 /// 内置扩展独占的 id 前缀。
 pub const BUILT_IN_PREFIX: &str = "sayso.";
 /// Sayso 在扩展分组中代画的块（如词条卡片）独占的块 id 前缀，扩展不能用它新增或移除块。

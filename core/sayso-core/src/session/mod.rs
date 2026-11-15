@@ -1,4 +1,4 @@
-//! 输入会话：快捷键触发录音识别或读取选区，文本就绪后广播 input。
+//! 输入会话：语音识别和读取选区共用中间件流程与结果交付。
 
 mod action;
 mod dispatch;
@@ -75,12 +75,14 @@ pub(crate) struct Session {
     /// 每次开始新流程递增，用于丢弃过期的异步回调。
     generation: u64,
     recording_shortcut: Option<Hotkey>,
-    /// 触发本次流程时的前台应用，扩展写入的目标。候选框不会成为前台窗口，因此触发时取得即可。
+    /// 触发本次流程时的前台应用，语音写入的目标。候选框不会成为前台窗口，因此触发时取得即可。
     source: Option<AppInfo>,
     recognition: Option<Recognition>,
     /// 正在读取选区的任务。取消时中止，平台随之放弃读取（如不再等待松开按键后模拟复制）。
     selection: Option<tokio::task::AbortHandle>,
     hovering: bool,
+    /// 中间件与交付属于同一轮输入，候选框关闭后仍须等交付结束。
+    input_pending: bool,
 }
 
 impl Session {
@@ -118,6 +120,11 @@ impl Inner {
         let Some(input) = settings.input_for(key) else { return };
         self.update_session(|session| {
             log::info!("trigger {key:?} input={:?} phase={}", input, session.phase.label());
+            let replaces_recording =
+                input == InputSource::Selection && matches!(session.phase, Phase::Recording { .. });
+            if session.input_pending || (session.is_active() && !replaces_recording) {
+                return;
+            }
             if !settings.languages().is_valid() {
                 return self.present_failure(
                     session,
@@ -125,18 +132,12 @@ impl Inner {
                 );
             }
             match input {
-                InputSource::Speech => {
-                    if !session.is_active() {
-                        self.start_recording(session, key, &settings);
-                    }
-                }
+                InputSource::Speech => self.start_recording(session, key, &settings),
                 InputSource::Selection => {
-                    if matches!(session.phase, Phase::Recording { .. }) {
+                    if replaces_recording {
                         self.cancel_flow(session);
                     }
-                    if !session.is_active() {
-                        self.read_selection(session);
-                    }
+                    self.read_selection(session);
                 }
             }
         });
@@ -151,7 +152,7 @@ impl Inner {
         self.trigger(key);
     }
 
-    /// 结束录音，等待识别结果后广播文本。
+    /// 结束录音，等待识别结果后进入文本处理流程。
     pub(crate) fn stop(self: &Arc<Self>) {
         let finishing = self.update_session(|session| {
             log::info!("stop phase={} generation={}", session.phase.label(), session.generation);
@@ -196,7 +197,7 @@ impl Inner {
                 }
             });
             if let Some(input) = input {
-                inner.run_dispatch(input);
+                inner.run_input(input).await;
             }
         });
     }
@@ -312,13 +313,13 @@ impl Inner {
                 Some(inner.present_input(session, text, InputSource::Selection, hold::SELECTION))
             });
             if let Some(input) = input {
-                inner.run_dispatch(input);
+                inner.run_input(input).await;
             }
         });
         session.selection = Some(task.abort_handle());
     }
 
-    /// 文本就绪后准备广播，在候选框首次展示时就标记全部订阅者正在处理。
+    /// 候选框首次展示时登记全部中间件和最终交付。
     fn present_input(
         self: &Arc<Self>,
         session: &mut Session,
@@ -329,7 +330,8 @@ impl Inner {
         let mut surface = Surface::new(Some(text.clone()), hold);
         let payload = Payload::Input { input: Input { text, via }, source: session.source.clone() };
         let mut dispatch = self.prepare_dispatch(payload, Route::Republished { by: APP_SOURCE.into() });
-        dispatch.attach_surface(&mut surface);
+        dispatch.attach_input_surface(&mut surface);
+        session.input_pending = true;
         self.present(session, surface);
         dispatch
     }

@@ -37,6 +37,7 @@ internal static class SmokeTests
             if (disk["targetLanguage"]!.GetValue<string>() != "ja") throw new Exception("Settings were not persisted.");
             await core.Call("updateSettings", original);
         });
+        await Check("Shortcut recorder captures and persists modifier combinations without leaking keys", () => HotkeyChecks.Recording(core, window));
         await Check("Windows clipboard Unicode roundtrip and restoration", async () =>
         {
             using var saved = await ClipboardService.Snapshot();

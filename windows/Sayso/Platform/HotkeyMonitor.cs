@@ -19,6 +19,8 @@ internal sealed class HotkeyMonitor : IDisposable
     private readonly HashSet<uint> pressed = [];
     /// <summary>已触发快捷键的键，松开时一并吞掉。</summary>
     private readonly HashSet<uint> consumed = [];
+    /// <summary>录制时吞掉了按下事件的键，录制完成后仍需吞掉重复和松开事件。</summary>
+    private readonly HashSet<uint> recordingKeys = [];
     private nint hook;
     /// <summary>录制中按下、尚未松开的修饰键：单独松开即录为单修饰键快捷键。</summary>
     private uint? recordingModifier;
@@ -52,7 +54,14 @@ internal sealed class HotkeyMonitor : IDisposable
         if (Settings is null) return NativeMethods.CallNextHookEx(hook, code, message, data);
         if (IsRecordingKey)
         {
+            if (down) recordingKeys.Add(key.Key);
+            else recordingKeys.Remove(key.Key);
             Record(key.Key, down, fresh);
+            return 1;
+        }
+        if (recordingKeys.Contains(key.Key))
+        {
+            if (!down) recordingKeys.Remove(key.Key);
             return 1;
         }
         var hold = Settings["hotkeyStyle"]!.GetValue<string>() == "hold";
@@ -110,12 +119,13 @@ internal sealed class HotkeyMonitor : IDisposable
         KeyRecorded?.Invoke(key, modifiers);
     }
 
-    private static ulong Modifiers(uint excluding)
+    private ulong Modifiers(uint excluding)
     {
+        // 钩子在系统更新异步键态前执行，且录制会吞掉修饰键，必须以收到的按键事件为准。
         ulong mask = 0;
-        if (excluding is not (0xA2 or 0xA3) && (NativeMethods.GetAsyncKeyState(0x11) < 0)) mask |= 1;
-        if (excluding is not (0xA4 or 0xA5) && (NativeMethods.GetAsyncKeyState(0x12) < 0)) mask |= 2;
-        if (excluding is not (0xA0 or 0xA1) && (NativeMethods.GetAsyncKeyState(0x10) < 0)) mask |= 4;
+        if (excluding is not (0xA2 or 0xA3) && (pressed.Contains(0xA2) || pressed.Contains(0xA3))) mask |= 1;
+        if (excluding is not (0xA4 or 0xA5) && (pressed.Contains(0xA4) || pressed.Contains(0xA5))) mask |= 2;
+        if (excluding is not (0xA0 or 0xA1) && (pressed.Contains(0xA0) || pressed.Contains(0xA1))) mask |= 4;
         return mask;
     }
 

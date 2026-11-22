@@ -65,6 +65,7 @@ internal sealed partial class SettingsWindow
         var key = Settings["shortcuts"]!.AsArray().FirstOrDefault(item => item!["input"]!.GetValue<string>() == input)?["key"];
         var recorder = Controls.Button(key is null ? L("设置快捷键", "Set shortcut") :
             HotkeyMonitor.KeyName(key["keyCode"]!.GetValue<uint>(), key["modifiers"]!.GetValue<ulong>()), () => { });
+        Microsoft.UI.Xaml.Automation.AutomationProperties.SetAutomationId(recorder, $"ShortcutRecorder-{input}");
         recorder.Click += (_, _) =>
         {
             recorder.Content = L("请按下快捷键…", "Press a shortcut…");
